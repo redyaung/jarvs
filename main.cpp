@@ -7,6 +7,8 @@
 #include <initializer_list>
 #include <optional>
 #include <cstdlib>
+#include <iomanip>
+#include <string>
 
 constexpr uint32_t nbytes(uint32_t nwords) {
   return nwords * 4;
@@ -67,6 +69,11 @@ template<uint32_t N>
 struct MainMemory {
   std::byte bytes[1<< N];
 
+  // initialize memory with all zeros (unnecessary, but for demo purposes)
+  MainMemory() {
+    std::fill(bytes, bytes + (1<< N), std::byte{0u});
+  }
+
   template<uint32_t W>
   Block<W> readBlock(uint32_t addr) {
     std::cout << "reading from memory" << std::endl;
@@ -92,6 +99,7 @@ struct MainMemory {
   }
 };
 
+// Cache
 // W: number of words in a block
 // S: number of blocks in a set (set-associativity)
 // B: number of blocks in the cache
@@ -118,7 +126,11 @@ struct Cache {
   Entry entries[B];
   MainMemory<N> mainMem;
 
-  Cache(MainMemory<N> mainMem) : mainMem{mainMem} {}
+  Cache(MainMemory<N> mainMem) : mainMem{mainMem} {
+    for (auto entryIdx = 0; entryIdx < B; entryIdx++) {
+      entries[entryIdx].valid = false;
+    }
+  }
 
   template<uint32_t _W>
   Block<_W> readBlock(uint32_t addr) {
@@ -229,32 +241,57 @@ std::ostream& operator<<(std::ostream& os, const Block<W>& block) {
   return os;
 }
 
+// cache pretty-printing
+template<uint32_t W, uint32_t S, uint32_t B, uint32_t N>
+std::ostream& operator<<(std::ostream& os, const Cache<W, S, B, N> &cache) {
+  os << std::string(50, '-') << "\n";
+  os << std::setw(8) << "status" << " | ";
+  os << std::setw(8) << "tag" << " | ";
+  os << "block" << "\n";
+  for (auto entryIdx = 0; entryIdx < B; entryIdx++) {
+    if (entryIdx % S == 0) {
+      os << std::string(50, '-') << "\n";
+    }
+    const auto& entry = cache.entries[entryIdx];
+    os << std::setw(8) << (entry.valid ? "valid" : "invalid") << " | ";
+    os << std::setw(8) << std::hex << entry.tag << " | ";
+    os << entry.block << "\n";
+  }
+  os << std::string(50, '-');
+  return os;
+}
+
 int main() {
   // Fully associatve cache
   MainMemory<8> mem;
-  Cache<4, 4, 4, 8> cache{ mem };
+  Cache<4, 2, 4, 8> cache{ mem };
 
   cache.writeBlock(0x10, Block<1>({0xDEADBEEFu}));
   cache.writeBlock(0x30, Block<1>({0xFACADEu}));
   cache.writeBlock(0x50, Block<1>({0xBEADu}));
+  std::cout << cache << std::endl;
 
   Block w = cache.readBlock<1>(0x10);
   assert(uint32_t(w[0]) == 0xDEADBEEFu);
   std::cout << "0x10: " << w << std::endl;
+  std::cout << cache << std::endl;
 
   w = cache.readBlock<1>(0x30);
   assert(uint32_t(w[0]) == 0xFACADEu);
   std::cout << "0x30: " << w << std::endl;
+  std::cout << cache << std::endl;
 
   w = cache.readBlock<1>(0x50);
   assert(uint32_t(w[0]) == 0xBEADu);
   std::cout << "0x50: " << w << std::endl;
+  std::cout << cache << std::endl;
 
   w = cache.readBlock<1>(0x10);
   std::cout << "0x10: " << w << std::endl;
 
   w = cache.readBlock<1>(0x30);
   std::cout << "0x30: " << w << std::endl;
+  std::cout << cache << std::endl;
 
   // // 2-way set associative cache
   // MainMemory<8> mem;
