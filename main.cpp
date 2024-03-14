@@ -22,8 +22,7 @@ uint32_t randInt(uint32_t min, uint32_t max);
 struct Word {
   std::byte bytes[nbytes(1)];
 
-  Word() = default;
-  Word(uint32_t value) {
+  Word(uint32_t value = 0) {
     auto b = std::bit_cast<std::byte*>(&value);
     // this probably only works for little endian
     for (auto i = 0; i < nbytes(1); i++) {
@@ -41,7 +40,11 @@ template<uint32_t W>
 struct Block {
   std::byte bytes[nbytes(W)];
 
-  Block() = default;
+  // initialize blocks with all zeros -- unnecessary but clarifying
+  Block() {
+    std::fill(bytes, bytes + nbytes(W), std::byte{0u});
+  }
+
   // better way: refer to make_tuple()
   Block(std::initializer_list<Word> words) {
     if (words.size() != W) {
@@ -99,13 +102,18 @@ struct MainMemory {
   }
 };
 
+enum class WriteScheme {
+  WriteThrough, WriteBack
+};
+
 // Cache
 // W: number of words in a block
 // S: number of blocks in a set (set-associativity)
 // B: number of blocks in the cache
 // N: address space of the underlying main memory
 // fields: | tag(rem) | index(log(B)) | block(log(W)) | word(2) |
-template<uint32_t W, uint32_t S, uint32_t B, uint32_t N>
+template<uint32_t W, uint32_t S, uint32_t B, uint32_t N,
+  WriteScheme WSch = WriteScheme::WriteThrough>
 struct Cache {
   static_assert(std::has_single_bit(W), "W must be a power of 2");
   static_assert(std::has_single_bit(B), "B must be a power of 2");
@@ -119,6 +127,7 @@ struct Cache {
 
   struct Entry {
     bool valid;
+    bool dirty;
     uint32_t tag;
     Block<W> block;
   };
@@ -126,9 +135,12 @@ struct Cache {
   Entry entries[B];
   MainMemory<N> mainMem;
 
+  // only the initial setting of valid bit is necessary
   Cache(MainMemory<N> mainMem) : mainMem{mainMem} {
     for (auto entryIdx = 0; entryIdx < B; entryIdx++) {
       entries[entryIdx].valid = false;
+      entries[entryIdx].dirty = false;
+      entries[entryIdx].tag = 0u;
     }
   }
 
@@ -140,7 +152,7 @@ struct Cache {
     }
     uint32_t tag = tagBits(addr);
     uint32_t setIdx = indexBits(addr);
-    auto entryIdx = findCacheEntry(addr);
+    std::optional<uint32_t> entryIdx = findCacheEntry(addr);
     if (!entryIdx.has_value()) {  // cache miss
       std::cout << "cache miss" << std::endl;
       // find a free cache entry -- may not exist
@@ -154,7 +166,19 @@ struct Cache {
       if (freeEntry == entries + startingBlockIdx + S) {
         std::cout << "performing cache eviction" << std::endl;
         uint32_t evictedIdx = randInt(startingBlockIdx, startingBlockIdx + S - 1);
-        entries[evictedIdx].valid = false;
+        std::cout << "evictedIdx: " << evictedIdx << std::endl;
+        // (write-back only) if cache entry is dirty, write it back before eviction
+        if constexpr (WSch == WriteScheme::WriteBack) {
+          if (entries[evictedIdx].dirty) {
+            uint32_t evictedIndexBits = evictedIdx / S;
+            uint32_t evictedTagBits = entries[evictedIdx].tag;
+            uint32_t indexOffset = nBlockBits + 2;
+            uint32_t tagOffset = indexOffset + nIndexBits;
+            uint32_t evictedAddr = (evictedTagBits<< tagOffset) |
+              (evictedIndexBits<< indexOffset);
+            mainMem.template writeBlock<W>(evictedAddr, entries[evictedIdx].block);
+          }
+        }
         entryIdx = std::make_optional(evictedIdx);
       } else {
         std::cout << "found an empty entry in the set" << std::endl;
@@ -163,7 +187,7 @@ struct Cache {
       // read the block at the requested address from main memory
       uint32_t startingAddr = (addr / nbytes(W)) * nbytes(W);
       Block block = mainMem.template readBlock<W>(startingAddr);
-      entries[*entryIdx] = {true, tag, block};
+      entries[*entryIdx] = Entry{true, false, tag, block};
     } else {
       std::cout << "cache hit" << std::endl;
     }
@@ -182,13 +206,23 @@ struct Cache {
     if (!isAligned(addr, _W)) {
       throw std::invalid_argument("address is not word-aligned");
     }
-    if (auto entryIdx = findCacheEntry(addr)) {  // cache hit
+    if (std::optional<uint32_t> entryIdx = findCacheEntry(addr)) {  // cache hit
       std::cout << "cache hit - writing to cache entry" << std::endl;
       Block<W> &entryBlock = entries[*entryIdx].block;
       uint32_t blockAddr = addr % nbytes(W);
       std::copy(block.bytes, block.bytes + nbytes(_W), entryBlock.bytes + blockAddr);
+      entries[*entryIdx].dirty = true;
+    } else {  // cache miss
+      // (write-back only) put the block containing address into cache, then write
+      if constexpr (WSch == WriteScheme::WriteBack) {
+        this->readBlock<_W>(addr);
+        this->writeBlock<_W>(addr, block);
+      }
     }
-    mainMem.template writeBlock(addr, block);
+    // (write-through only) write unconditionally to the main memory
+    if constexpr (WSch == WriteScheme::WriteThrough) {
+      mainMem.template writeBlock(addr, block);
+    }
   }
 
   std::optional<uint32_t> findCacheEntry(uint32_t addr) {
@@ -242,55 +276,66 @@ std::ostream& operator<<(std::ostream& os, const Block<W>& block) {
 }
 
 // cache pretty-printing
-template<uint32_t W, uint32_t S, uint32_t B, uint32_t N>
-std::ostream& operator<<(std::ostream& os, const Cache<W, S, B, N> &cache) {
-  os << std::string(50, '-') << "\n";
+template<uint32_t W, uint32_t S, uint32_t B, uint32_t N, WriteScheme WSch>
+std::ostream& operator<<(std::ostream& os, const Cache<W, S, B, N, WSch> &cache) {
+  os << std::string(60, '-') << "\n";
   os << std::setw(8) << "status" << " | ";
+  os << std::setw(8) << "dirty" << " | ";
   os << std::setw(8) << "tag" << " | ";
   os << "block" << "\n";
   for (auto entryIdx = 0; entryIdx < B; entryIdx++) {
     if (entryIdx % S == 0) {
-      os << std::string(50, '-') << "\n";
+      os << std::string(60, '-') << "\n";
     }
     const auto& entry = cache.entries[entryIdx];
     os << std::setw(8) << (entry.valid ? "valid" : "invalid") << " | ";
+    os << std::setw(8) << (entry.dirty ? "yes" : "no") << " | ";
     os << std::setw(8) << std::hex << entry.tag << " | ";
     os << entry.block << "\n";
   }
-  os << std::string(50, '-');
+  os << std::string(60, '-');
   return os;
 }
 
 int main() {
-  // Fully associatve cache
+  // Write-Back Write-Allocate
   MainMemory<8> mem;
-  Cache<4, 2, 4, 8> cache{ mem };
+  Cache<4, 2, 4, 8, WriteScheme::WriteBack> cache{ mem };
 
   cache.writeBlock(0x10, Block<1>({0xDEADBEEFu}));
-  cache.writeBlock(0x30, Block<1>({0xFACADEu}));
-  cache.writeBlock(0x50, Block<1>({0xBEADu}));
+  std::cout << cache << std::endl;
+  cache.writeBlock(0x14, Block<1>({0xFACADEu}));
   std::cout << cache << std::endl;
 
   Block w = cache.readBlock<1>(0x10);
   assert(uint32_t(w[0]) == 0xDEADBEEFu);
-  std::cout << "0x10: " << w << std::endl;
   std::cout << cache << std::endl;
 
-  w = cache.readBlock<1>(0x30);
+  w = cache.readBlock<1>(0x14);
   assert(uint32_t(w[0]) == 0xFACADEu);
-  std::cout << "0x30: " << w << std::endl;
   std::cout << cache << std::endl;
 
-  w = cache.readBlock<1>(0x50);
-  assert(uint32_t(w[0]) == 0xBEADu);
-  std::cout << "0x50: " << w << std::endl;
+  cache.writeBlock(0x30, Block<1>({0x3}));
+  std::cout << cache << std::endl;
+  cache.writeBlock(0x50, Block<1>({0x5}));
+  std::cout << cache << std::endl;
+
+  cache.writeBlock(0x70, Block<1>({0x7}));
+  std::cout << cache << std::endl;
+  cache.writeBlock(0x90, Block<1>({0x9}));
+  std::cout << cache << std::endl;
+
+  cache.writeBlock(0x30, Block<1>({0x3}));
+  std::cout << cache << std::endl;
+  cache.writeBlock(0x50, Block<1>({0x5}));
   std::cout << cache << std::endl;
 
   w = cache.readBlock<1>(0x10);
-  std::cout << "0x10: " << w << std::endl;
+  assert(uint32_t(w[0]) == 0xDEADBEEFu);
+  std::cout << cache << std::endl;
 
-  w = cache.readBlock<1>(0x30);
-  std::cout << "0x30: " << w << std::endl;
+  w = cache.readBlock<1>(0x14);
+  assert(uint32_t(w[0]) == 0xFACADEu);
   std::cout << cache << std::endl;
 
   // // 2-way set associative cache
