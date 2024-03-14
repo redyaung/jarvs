@@ -9,6 +9,13 @@
 #include <cstdlib>
 #include <iomanip>
 #include <string>
+#include <thread>
+#include <cstdio>
+
+using namespace std::chrono_literals;
+
+uint32_t __cache_delay = 1u;
+uint32_t __memory_delay = 5u;
 
 constexpr uint32_t nbytes(uint32_t nwords) {
   return nwords * 4;
@@ -41,7 +48,10 @@ template<uint32_t W>
 struct Block {
   std::byte bytes[nbytes(W)];
 
-  Block() = default;
+  Block() {
+    std::fill(bytes, bytes + nbytes(W), std::byte{0u});
+  }
+
   // better way: refer to make_tuple()
   Block(std::initializer_list<Word> words) {
     if (words.size() != W) {
@@ -76,12 +86,17 @@ struct MainMemory {
 
   template<uint32_t W>
   Block<W> readBlock(uint32_t addr) {
-    std::cout << "reading from memory" << std::endl;
+    std::cout << "\t" << "reading from memory" << std::endl;
     if (!isAligned(addr, W)) {
       throw std::invalid_argument("address is not word-aligned");
     } else if (addr + nbytes(W) >= (1<< N)) {
       throw std::out_of_range("end address is out of address space");
     }
+    for (auto cycle = 0; cycle < __memory_delay; cycle++) {
+      std::cout << "...  " << std::flush;
+      std::this_thread::sleep_for(500ms);
+    }
+    std::cout << std::endl;
     Block<W> block;
     std::copy(bytes + addr, bytes + addr + nbytes(W), block.bytes);
     return block;
@@ -89,12 +104,17 @@ struct MainMemory {
 
   template<uint32_t W>
   void writeBlock(uint32_t addr, Block<W> block) {
-    std::cout << "writing to memory" << std::endl;
+    std::cout << "\t" << "writing to memory" << std::endl;
     if (!isAligned(addr, W)) {
       throw std::invalid_argument("address is not word-aligned");
     } else if (addr + nbytes(W) >= (1<< N)) {
       throw std::out_of_range("end address is out of address space");
     }
+    for (auto cycle = 0; cycle < __memory_delay; cycle++) {
+      std::cout << "...  " << std::flush;
+      std::this_thread::sleep_for(500ms);
+    }
+    std::cout << std::endl;
     std::copy(block.bytes, block.bytes + nbytes(W), bytes + addr);
   }
 };
@@ -129,6 +149,7 @@ struct Cache {
   Cache(MainMemory<N> mainMem) : mainMem{mainMem} {
     for (auto entryIdx = 0; entryIdx < B; entryIdx++) {
       entries[entryIdx].valid = false;
+      entries[entryIdx].tag = 0u;
     }
   }
 
@@ -138,11 +159,18 @@ struct Cache {
     if (!isAligned(addr, _W)) {
       throw std::invalid_argument("address is not word-aligned");
     }
+    std::cout << "\t" << "reading from cache" << std::endl;
+    for (auto cycle = 0; cycle < __cache_delay; cycle++) {
+      std::cout << "...  " << std::flush;
+      std::this_thread::sleep_for(500ms);
+    }
+    std::cout << std::endl;
     uint32_t tag = tagBits(addr);
     uint32_t setIdx = indexBits(addr);
+    std::cout << "\t" << "index: " << setIdx << std::endl;
     auto entryIdx = findCacheEntry(addr);
     if (!entryIdx.has_value()) {  // cache miss
-      std::cout << "cache miss" << std::endl;
+      std::cout << "\t" << "cache miss" << std::endl;
       // find a free cache entry -- may not exist
       uint32_t startingBlockIdx = setIdx * S;
       auto freeEntry = std::find_if(
@@ -152,12 +180,12 @@ struct Cache {
       );
       // evict one of the entries randomly if there are no free entries
       if (freeEntry == entries + startingBlockIdx + S) {
-        std::cout << "performing cache eviction" << std::endl;
+        std::cout << "\t" << "performing cache eviction" << std::endl;
         uint32_t evictedIdx = randInt(startingBlockIdx, startingBlockIdx + S - 1);
         entries[evictedIdx].valid = false;
         entryIdx = std::make_optional(evictedIdx);
       } else {
-        std::cout << "found an empty entry in the set" << std::endl;
+        std::cout << "\t" << "found an empty entry in the set" << std::endl;
         entryIdx = std::make_optional(freeEntry - entries);
       }
       // read the block at the requested address from main memory
@@ -165,7 +193,7 @@ struct Cache {
       Block block = mainMem.template readBlock<W>(startingAddr);
       entries[*entryIdx] = {true, tag, block};
     } else {
-      std::cout << "cache hit" << std::endl;
+      std::cout << "\t" << "cache hit" << std::endl;
     }
     // now, the entry at entryIdx contains a valid cache
     const Block<W> &entryBlock = entries[*entryIdx].block;
@@ -182,8 +210,14 @@ struct Cache {
     if (!isAligned(addr, _W)) {
       throw std::invalid_argument("address is not word-aligned");
     }
+    std::cout << "\t" << "writing to cache" << std::endl;
+    for (auto cycle = 0; cycle < __cache_delay; cycle++) {
+      std::cout << "...  " << std::flush;
+      std::this_thread::sleep_for(500ms);
+    }
+    std::cout << std::endl;
     if (auto entryIdx = findCacheEntry(addr)) {  // cache hit
-      std::cout << "cache hit - writing to cache entry" << std::endl;
+      std::cout << "\t" << "cache hit - writing to cache entry" << std::endl;
       Block<W> &entryBlock = entries[*entryIdx].block;
       uint32_t blockAddr = addr % nbytes(W);
       std::copy(block.bytes, block.bytes + nbytes(_W), entryBlock.bytes + blockAddr);
@@ -261,37 +295,101 @@ std::ostream& operator<<(std::ostream& os, const Cache<W, S, B, N> &cache) {
   return os;
 }
 
-int main() {
-  // Fully associatve cache
-  MainMemory<8> mem;
-  Cache<4, 2, 4, 8> cache{ mem };
+template<uint32_t W, uint32_t S, uint32_t B, uint32_t N>
+void interact(Cache<W, S, B, N> &cache) {
+  while (true) {
+    std::string userInput;
+    std::getline(std::cin, userInput);
+    if (userInput == "q") {
+      break;
+    }
+    char commandCStr[64];
+    uint32_t address, value;
+    std::sscanf(userInput.data(), "%s %x %x", commandCStr, &address, &value);
+    std::string command(commandCStr);
+    if (command == "READ") {
+      Block block = cache.template readBlock<1>(address);
+      std::cout << "read word " << std::hex << block[0] << " from " << std::hex
+        << address << std::endl;
+    } else if (command == "WRITE") {
+      cache.template writeBlock<1>(address, Block<1>({value}));
+      std::cout << "wrote word " << std::hex << value << " to " << std::hex
+        << address << std::endl;
+    } else {
+      continue;
+    }
+    std::cout << cache << std::endl;
+  }
+}
 
-  cache.writeBlock(0x10, Block<1>({0xDEADBEEFu}));
-  cache.writeBlock(0x30, Block<1>({0xFACADEu}));
-  cache.writeBlock(0x50, Block<1>({0xBEADu}));
-  std::cout << cache << std::endl;
+enum class SetAssociativity {
+  DirectMapped, NAssociative, FullyAssociative
+};
 
-  Block w = cache.readBlock<1>(0x10);
-  assert(uint32_t(w[0]) == 0xDEADBEEFu);
-  std::cout << "0x10: " << w << std::endl;
-  std::cout << cache << std::endl;
+int main(int argc, char *argv[]) {
+  std::cout << "8-bit address space; L1; 4 words per block; 4 blocks in cache" << std::endl;
+  std::cout << "write-through no-write-allocate" << std::endl;
 
-  w = cache.readBlock<1>(0x30);
-  assert(uint32_t(w[0]) == 0xFACADEu);
-  std::cout << "0x30: " << w << std::endl;
-  std::cout << cache << std::endl;
+  SetAssociativity associativity = SetAssociativity::DirectMapped;
+  if (argc > 1) {
+    if (strcmp(argv[1], "-f") == 0) {
+      associativity = SetAssociativity::FullyAssociative;
+    } else if (strcmp(argv[1], "-s") == 0) {
+      associativity = SetAssociativity::NAssociative;
+    }
+  }
+  
+  switch (associativity) {
+    case SetAssociativity::DirectMapped: {
+      std::cout << "direct-mapped" << std::endl;
+      Cache<4, 1, 4, 8> cache{ MainMemory<8>() };
+      interact(cache);
+      break;
+    }
+    case SetAssociativity::FullyAssociative: {
+      std::cout << "fully-associative" << std::endl;
+      Cache<4, 4, 4, 8> cache{ MainMemory<8>() };
+      interact(cache);
+      break;
+    }
+    case SetAssociativity::NAssociative: {
+      std::cout << "n-way associative" << std::endl;
+      Cache<4, 2, 4, 8> cache{ MainMemory<8>() };
+      interact(cache);
+      break;
+    }
+  }
 
-  w = cache.readBlock<1>(0x50);
-  assert(uint32_t(w[0]) == 0xBEADu);
-  std::cout << "0x50: " << w << std::endl;
-  std::cout << cache << std::endl;
+  // // Fully associatve cache
+  // MainMemory<8> mem;
+  // Cache<4, 2, 4, 8> cache{ mem };
 
-  w = cache.readBlock<1>(0x10);
-  std::cout << "0x10: " << w << std::endl;
+  // cache.writeBlock(0x10, Block<1>({0xDEADBEEFu}));
+  // cache.writeBlock(0x30, Block<1>({0xFACADEu}));
+  // cache.writeBlock(0x50, Block<1>({0xBEADu}));
+  // std::cout << cache << std::endl << std::flush;
 
-  w = cache.readBlock<1>(0x30);
-  std::cout << "0x30: " << w << std::endl;
-  std::cout << cache << std::endl;
+  // Block w = cache.readBlock<1>(0x10);
+  // assert(uint32_t(w[0]) == 0xDEADBEEFu);
+  // std::cout << "0x10: " << w << std::endl;
+  // std::cout << cache << std::endl << std::flush;
+
+  // w = cache.readBlock<1>(0x30);
+  // assert(uint32_t(w[0]) == 0xFACADEu);
+  // std::cout << "0x30: " << w << std::endl;
+  // std::cout << cache << std::endl << std::flush;
+
+  // w = cache.readBlock<1>(0x50);
+  // assert(uint32_t(w[0]) == 0xBEADu);
+  // std::cout << "0x50: " << w << std::endl;
+  // std::cout << cache << std::endl << std::flush;
+
+  // w = cache.readBlock<1>(0x10);
+  // std::cout << "0x10: " << w << std::endl << std::flush;
+
+  // w = cache.readBlock<1>(0x30);
+  // std::cout << "0x30: " << w << std::endl;
+  // std::cout << cache << std::endl << std::flush;
 
   // // 2-way set associative cache
   // MainMemory<8> mem;
