@@ -1,3 +1,6 @@
+#ifndef SIMULATOR_MEMORY_HPP
+#define SIMULATOR_MEMORY_HPP
+
 #include <iostream>
 #include <bitset>
 #include <bit>
@@ -10,13 +13,14 @@
 #include <iomanip>
 #include <string>
 
-constexpr uint32_t nbytes(uint32_t nwords) {
-  return nwords * 4;
-}
-
 // forward declarations
 bool isAligned(uint32_t addr, uint32_t nwords);
 uint32_t randInt(uint32_t min, uint32_t max);
+
+// constexpr function definitions
+constexpr uint32_t nbytes(uint32_t nwords) {
+  return nwords * 4;
+}
 
 // 32-bit word
 struct Word {
@@ -298,16 +302,16 @@ struct Cache {
 };
 
 // Checks if address is aligned on an n-word boundary
-bool isAligned(uint32_t addr, uint32_t nwords) {
+inline bool isAligned(uint32_t addr, uint32_t nwords) {
   return addr % nbytes(nwords) == 0;
 }
 
 // better: consider using the new RNGs offered by C++'s <random>
-uint32_t randInt(uint32_t min, uint32_t max) {
+inline uint32_t randInt(uint32_t min, uint32_t max) {
   return min + rand() % (max - min + 1);
 }
 
-std::ostream& operator<<(std::ostream& os, const Word& word) {
+inline std::ostream& operator<<(std::ostream& os, const Word& word) {
   os << std::hex << uint32_t(word);
   return os;
 }
@@ -326,7 +330,8 @@ std::ostream& operator<<(std::ostream& os, const Block<W>& block) {
 }
 
 // cache pretty-printing
-template<uint32_t W, uint32_t S, uint32_t B, uint32_t N, WriteScheme WSch, ReplacementPolicy Plc>
+template<uint32_t W, uint32_t S, uint32_t B, uint32_t N,
+  WriteScheme WSch, ReplacementPolicy Plc>
 std::ostream& operator<<(std::ostream& os, const Cache<W, S, B, N, WSch, Plc> &cache) {
   os << std::string(60, '-') << "\n";
   os << std::setw(8) << "status" << " | ";
@@ -358,123 +363,4 @@ std::ostream& operator<<(std::ostream& os, const Cache<W, S, B, N, WSch, Plc> &c
   return os;
 }
 
-int main() {
-  // Write-Back Write-Allocate
-  MainMemory<8> mem;
-  Cache<4, 4, 4, 8, WriteScheme::WriteBack, ReplacementPolicy::ApproximateLRU> cache{ mem };
-
-  cache.writeBlock(0x10, Block<1>({0xDEADBEEFu}));
-  std::cout << cache << std::endl;
-  cache.writeBlock(0x14, Block<1>({0xFACADEu}));
-  std::cout << cache << std::endl;
-
-  Block w = cache.readBlock<1>(0x10);
-  assert(uint32_t(w[0]) == 0xDEADBEEFu);
-  std::cout << cache << std::endl;
-
-  w = cache.readBlock<1>(0x14);
-  assert(uint32_t(w[0]) == 0xFACADEu);
-  std::cout << cache << std::endl;
-
-  cache.writeBlock(0x30, Block<1>({0x3}));
-  std::cout << cache << std::endl;
-  cache.writeBlock(0x50, Block<1>({0x5}));
-  std::cout << cache << std::endl;
-
-  cache.writeBlock(0x70, Block<1>({0x7}));
-  std::cout << cache << std::endl;
-  cache.writeBlock(0x90, Block<1>({0x9}));
-  std::cout << cache << std::endl;
-
-  cache.writeBlock(0x30, Block<1>({0x3}));
-  std::cout << cache << std::endl;
-  cache.writeBlock(0x50, Block<1>({0x5}));
-  std::cout << cache << std::endl;
-
-  w = cache.readBlock<1>(0x10);
-  assert(uint32_t(w[0]) == 0xDEADBEEFu);
-  std::cout << cache << std::endl;
-
-  w = cache.readBlock<1>(0x14);
-  assert(uint32_t(w[0]) == 0xFACADEu);
-  std::cout << cache << std::endl;
-
-  // // 2-way set associative cache
-  // MainMemory<8> mem;
-  // Cache<4, 2, 4, 8> cache{ mem };
-
-  // cache.writeBlock(0x10, Block<1>({0xDEADBEEFu}));
-  // cache.writeBlock(0x30, Block<1>({0xFACADEu}));
-  // cache.writeBlock(0x50, Block<1>({0xBEADu}));
-
-  // Block w = cache.readBlock<1>(0x10);
-  // assert(uint32_t(w[0]) == 0xDEADBEEFu);
-  // std::cout << "0x10: " << w << std::endl;
-
-  // w = cache.readBlock<1>(0x30);
-  // assert(uint32_t(w[0]) == 0xFACADEu);
-  // std::cout << "0x30: " << w << std::endl;
-
-  // w = cache.readBlock<1>(0x50);
-  // assert(uint32_t(w[0]) == 0xBEADu);
-  // std::cout << "0x50: " << w << std::endl;
-
-  // w = cache.readBlock<1>(0x10);
-  // std::cout << "0x10: " << w << std::endl;
-
-  // w = cache.readBlock<1>(0x30);
-  // std::cout << "0x30: " << w << std::endl;
-
-
-  // // Direct-mapped, 4 words per block, 4 blocks
-  // MainMemory<8> mem;
-  // Cache<4, 4, 8> cache{ mem };
-
-  // cache.mainMem.writeBlock(0x0, Block<4>({0xAu, 0xBu, 0xCu, 0xDu}));
-
-  // Block w = cache.readBlock<1>(0x0);
-  // std::cout << "w: " << w << std::endl;
-  // assert(uint32_t(w[0]) == 0xAu);
-
-  // w = cache.readBlock<1>(0x4);
-  // std::cout << "w: " << w << std::endl;
-  // assert(uint32_t(w[0]) == 0xBu);
-
-  // w = cache.readBlock<1>(0x8);
-  // std::cout << "w: " << w << std::endl;
-  // assert(uint32_t(w[0]) == 0xCu);
-
-  // w = cache.readBlock<1>(0xC);
-  // std::cout << "w: " << w << std::endl;
-  // assert(uint32_t(w[0]) == 0xDu);
-
-
-  // // Direct-mapped, 1 word per block, 4 words
-  // MainMemory<8> mem;
-  // Cache<1, 4, 8> cache{ mem };
-
-  // cache.writeBlock(0x8, Block<1>({0xDEADBEEFu}));
-  // cache.writeBlock(0x18, Block<1>({0xFACADEu}));
-
-  // Block w = cache.readBlock<1>(0x8);
-  // assert(uint32_t(w[0]) == 0xDEADBEEFu);
-  // std::cout << "0x8: " << w << std::endl;
-
-  // w = cache.readBlock<1>(0x18);
-  // assert(uint32_t(w[0]) == 0xFACADEu);
-  // std::cout << "0x18: " << w << std::endl;
-
-  // w = cache.readBlock<1>(0x8);
-  // std::cout << "0x8: " << w << std::endl;
-
-  // w = cache.readBlock<1>(0x18);
-  // std::cout << "0x18: " << w << std::endl;
-
-  // // MainMemory Test
-  // MainMemory<8> mem;
-  // mem.writeBlock(0x8, Block<2>({0xDEADBEEF, 0xBEEFCADE}));
-  // Block b = mem.readBlock<1>(0xC);
-  // std::cout << "read block: " << b << std::endl;
-
-  return 0;
-}
+#endif
