@@ -79,7 +79,7 @@ struct MainMemory {
 
   template<uint32_t W>
   Block<W> readBlock(uint32_t addr) {
-    std::cout << "reading from memory" << std::endl;
+    std::cout << "reading 0x" << std::hex << addr << " from memory" << std::endl;
     if (!isAligned(addr, W)) {
       throw std::invalid_argument("address is not word-aligned");
     } else if (addr + nbytes(W) >= (1<< N)) {
@@ -92,7 +92,7 @@ struct MainMemory {
 
   template<uint32_t W>
   void writeBlock(uint32_t addr, Block<W> block) {
-    std::cout << "writing to memory" << std::endl;
+    std::cout << "writing 0x" << std::hex << addr << " to memory" << std::endl;
     if (!isAligned(addr, W)) {
       throw std::invalid_argument("address is not word-aligned");
     } else if (addr + nbytes(W) >= (1<< N)) {
@@ -127,8 +127,9 @@ struct Cache {
 
   static constexpr uint32_t nBlockBits = static_cast<uint32_t>(std::countr_zero(W));
   static constexpr uint32_t _indexBits = static_cast<uint32_t>(std::countr_zero(B));
-  static constexpr uint32_t _setBits = static_cast<uint32_t>(std::countr_zero(S));
-  static constexpr uint32_t nIndexBits = _indexBits - _setBits;
+  static constexpr uint32_t nSetBits = static_cast<uint32_t>(std::countr_zero(S));
+  static constexpr uint32_t nIndexBits = _indexBits - nSetBits;
+  static constexpr uint32_t setCount = B / S;
 
   struct Entry {
     bool valid = false;
@@ -140,6 +141,10 @@ struct Cache {
 
   Entry entries[B];
   MainMemory<N> mainMem;
+
+  // used only for approximate LRU; generalization of the approximate LRU cache
+  // scheme for 4-way set-associative caches (Patterson-Hennessy 5.8)
+  std::bitset<S - 1> lruBits[setCount];
   int totalAccessCount = 0;
 
   // only the initial setting of valid bit is necessary
@@ -147,6 +152,7 @@ struct Cache {
 
   template<uint32_t _W>
   Block<_W> readBlock(uint32_t addr) {
+    std::cout << "reading 0x" << std::hex << addr << " from cache" << std::endl;
     static_assert(W % _W == 0, "requested block size must divide internal block size");
     if (!isAligned(addr, _W)) {
       throw std::invalid_argument("address is not word-aligned");
@@ -174,11 +180,20 @@ struct Cache {
                 return e1.lastAccessedTime < e2.lastAccessedTime;
               });
             return evictEntryIt - entries;
+          } else if constexpr (Plc == ReplacementPolicy::ApproximateLRU) {
+            uint32_t lruEntryIdx = 0;
+            for (auto bit = 0, lruBit = 0; bit < nSetBits; ++bit) {
+              bool choice = !lruBits[setIdx][lruBit];
+              lruEntryIdx = (lruEntryIdx<< 1) + uint32_t(choice);
+              lruBit = 2 * lruBit + 1 + int(choice);
+            }
+            return lruEntryIdx + startingEntryIdx;
           } else {
             return randInt(startingEntryIdx, startingEntryIdx + S - 1);
           }
         };
         uint32_t evictedIdx = selectEvictionIndex();
+        std::cout << "evictedIdx: " << evictedIdx << std::endl;
         // (write-back only) if cache entry is dirty, write it back before eviction
         if constexpr (WSch == WriteScheme::WriteBack) {
           if (entries[evictedIdx].dirty) {
@@ -210,13 +225,14 @@ struct Cache {
     uint32_t blockOffset = addr % nbytes(W);
     std::copy(entryBlock.bytes + blockOffset, entryBlock.bytes + blockOffset + nbytes(_W),
       requestedBlock.bytes);
-    entry.lastAccessedTime = totalAccessCount;
+    updateLRUInfo(entry, addr, *entryIdx % S);
     ++totalAccessCount;     // update analytics
     return requestedBlock;
   }
 
   template<uint32_t _W>
   void writeBlock(uint32_t addr, Block<_W> block) {
+    std::cout << "writing 0x" << std::hex << addr << " to cache" << std::endl;
     static_assert(W % _W == 0, "requested block size must divide internal block size");
     if (!isAligned(addr, _W)) {
       throw std::invalid_argument("address is not word-aligned");
@@ -228,12 +244,13 @@ struct Cache {
       uint32_t blockAddr = addr % nbytes(W);
       std::copy(block.bytes, block.bytes + nbytes(_W), entryBlock.bytes + blockAddr);
       entry.dirty = true;
-      entry.lastAccessedTime = totalAccessCount;
+      updateLRUInfo(entry, addr, *entryIdx % S);
     } else {  // cache miss
       // (write-back only) put the block containing address into cache, then write
       if constexpr (WSch == WriteScheme::WriteBack) {
         this->readBlock<_W>(addr);
         this->writeBlock<_W>(addr, block);
+        return;
       }
     }
     // (write-through only) write unconditionally to the main memory
@@ -254,6 +271,21 @@ struct Cache {
       }
     }
     return {};
+  }
+
+  // localBlockIdx refers to the index of the block or entry in the set
+  void updateLRUInfo(Entry &entry, uint32_t addr, uint32_t localBlockIdx) {
+    if constexpr (Plc == ReplacementPolicy::PreciseLRU) {
+      entry.lastAccessedTime = totalAccessCount;
+    } else if constexpr (Plc == ReplacementPolicy::ApproximateLRU) {
+      uint32_t setIdx = indexBits(addr);
+      std::bitset<nSetBits> blockAddr(localBlockIdx);
+      // iterate from the most significant bit
+      for (int bit = nSetBits - 1, lruBit = 0; bit >= 0; bit--) {
+        lruBits[setIdx][lruBit] = blockAddr[bit];
+        lruBit = 2 * lruBit + 1 + int(blockAddr[bit]);
+      }
+    }
   }
 
   uint32_t tagBits(uint32_t addr) {
@@ -304,10 +336,8 @@ std::ostream& operator<<(std::ostream& os, const Cache<W, S, B, N, WSch, Plc> &c
     os << std::setw(8) << "lru bits" << " | ";
   }
   os << "block" << "\n";
+  os << std::string(60, '-') << "\n";
   for (auto entryIdx = 0; entryIdx < B; entryIdx++) {
-    if (entryIdx % S == 0) {
-      os << std::string(60, '-') << "\n";
-    }
     const auto& entry = cache.entries[entryIdx];
     os << std::setw(8) << (entry.valid ? "valid" : "invalid") << " | ";
     os << std::setw(8) << (entry.dirty ? "yes" : "no") << " | ";
@@ -316,15 +346,22 @@ std::ostream& operator<<(std::ostream& os, const Cache<W, S, B, N, WSch, Plc> &c
       os << std::setw(8) << std::dec << entry.lastAccessedTime << " | ";
     }
     os << entry.block << "\n";
+    if (entryIdx % S == S - 1) {
+      if constexpr (Plc == ReplacementPolicy::ApproximateLRU) {
+        uint32_t setIdx = entryIdx / S;
+        os << std::string(10, '=') << "\n";
+        os << "lru bits (prints mru; reversed): " << cache.lruBits[setIdx] << "\n";
+      }
+      os << std::string(60, '-') << (entryIdx < B - 1 ? "\n" : "");
+    }
   }
-  os << std::string(60, '-');
   return os;
 }
 
 int main() {
   // Write-Back Write-Allocate
   MainMemory<8> mem;
-  Cache<4, 2, 4, 8, WriteScheme::WriteBack, ReplacementPolicy::PreciseLRU> cache{ mem };
+  Cache<4, 4, 4, 8, WriteScheme::WriteBack, ReplacementPolicy::ApproximateLRU> cache{ mem };
 
   cache.writeBlock(0x10, Block<1>({0xDEADBEEFu}));
   std::cout << cache << std::endl;
