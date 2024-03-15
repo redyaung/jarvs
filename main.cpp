@@ -106,6 +106,10 @@ enum class WriteScheme {
   WriteThrough, WriteBack
 };
 
+enum class ReplacementPolicy {
+  Random, PreciseLRU, ApproximateLRU
+};
+
 // Cache
 // W: number of words in a block
 // S: number of blocks in a set (set-associativity)
@@ -113,7 +117,8 @@ enum class WriteScheme {
 // N: address space of the underlying main memory
 // fields: | tag(rem) | index(log(B)) | block(log(W)) | word(2) |
 template<uint32_t W, uint32_t S, uint32_t B, uint32_t N,
-  WriteScheme WSch = WriteScheme::WriteThrough>
+  WriteScheme WSch = WriteScheme::WriteThrough,
+  ReplacementPolicy Plc = ReplacementPolicy::Random>
 struct Cache {
   static_assert(std::has_single_bit(W), "W must be a power of 2");
   static_assert(std::has_single_bit(B), "B must be a power of 2");
@@ -126,23 +131,19 @@ struct Cache {
   static constexpr uint32_t nIndexBits = _indexBits - _setBits;
 
   struct Entry {
-    bool valid;
-    bool dirty;
-    uint32_t tag;
+    bool valid = false;
+    bool dirty = false;
+    uint32_t tag = 0u;
     Block<W> block;
+    int lastAccessedTime = 0;       // only used for precise LRU
   };
 
   Entry entries[B];
   MainMemory<N> mainMem;
+  int totalAccessCount = 0;
 
   // only the initial setting of valid bit is necessary
-  Cache(MainMemory<N> mainMem) : mainMem{mainMem} {
-    for (auto entryIdx = 0; entryIdx < B; entryIdx++) {
-      entries[entryIdx].valid = false;
-      entries[entryIdx].dirty = false;
-      entries[entryIdx].tag = 0u;
-    }
-  }
+  Cache(MainMemory<N> mainMem) : mainMem{mainMem} {}
 
   template<uint32_t _W>
   Block<_W> readBlock(uint32_t addr) {
@@ -156,17 +157,28 @@ struct Cache {
     if (!entryIdx.has_value()) {  // cache miss
       std::cout << "cache miss" << std::endl;
       // find a free cache entry -- may not exist
-      uint32_t startingBlockIdx = setIdx * S;
+      uint32_t startingEntryIdx = setIdx * S;
       auto freeEntry = std::find_if(
-        entries + startingBlockIdx,
-        entries + startingBlockIdx + S,
+        entries + startingEntryIdx,
+        entries + startingEntryIdx + S,
         [](const Entry &entry) { return !entry.valid; }
       );
       // evict one of the entries randomly if there are no free entries
-      if (freeEntry == entries + startingBlockIdx + S) {
+      if (freeEntry == entries + startingEntryIdx + S) {
         std::cout << "performing cache eviction" << std::endl;
-        uint32_t evictedIdx = randInt(startingBlockIdx, startingBlockIdx + S - 1);
-        std::cout << "evictedIdx: " << evictedIdx << std::endl;
+        auto selectEvictionIndex = [&]() -> uint32_t {
+          if constexpr (Plc == ReplacementPolicy::PreciseLRU) {
+            auto evictEntryIt = std::min_element(entries + startingEntryIdx,
+              entries + startingEntryIdx + S,
+              [](const Entry &e1, const Entry &e2) {
+                return e1.lastAccessedTime < e2.lastAccessedTime;
+              });
+            return evictEntryIt - entries;
+          } else {
+            return randInt(startingEntryIdx, startingEntryIdx + S - 1);
+          }
+        };
+        uint32_t evictedIdx = selectEvictionIndex();
         // (write-back only) if cache entry is dirty, write it back before eviction
         if constexpr (WSch == WriteScheme::WriteBack) {
           if (entries[evictedIdx].dirty) {
@@ -192,11 +204,14 @@ struct Cache {
       std::cout << "cache hit" << std::endl;
     }
     // now, the entry at entryIdx contains a valid cache
-    const Block<W> &entryBlock = entries[*entryIdx].block;
+    Entry &entry = entries[*entryIdx];
+    const Block<W> &entryBlock = entry.block;
     Block<_W> requestedBlock;
     uint32_t blockOffset = addr % nbytes(W);
     std::copy(entryBlock.bytes + blockOffset, entryBlock.bytes + blockOffset + nbytes(_W),
       requestedBlock.bytes);
+    entry.lastAccessedTime = totalAccessCount;
+    ++totalAccessCount;     // update analytics
     return requestedBlock;
   }
 
@@ -208,10 +223,12 @@ struct Cache {
     }
     if (std::optional<uint32_t> entryIdx = findCacheEntry(addr)) {  // cache hit
       std::cout << "cache hit - writing to cache entry" << std::endl;
-      Block<W> &entryBlock = entries[*entryIdx].block;
+      Entry &entry = entries[*entryIdx];
+      Block<W> &entryBlock = entry.block;
       uint32_t blockAddr = addr % nbytes(W);
       std::copy(block.bytes, block.bytes + nbytes(_W), entryBlock.bytes + blockAddr);
-      entries[*entryIdx].dirty = true;
+      entry.dirty = true;
+      entry.lastAccessedTime = totalAccessCount;
     } else {  // cache miss
       // (write-back only) put the block containing address into cache, then write
       if constexpr (WSch == WriteScheme::WriteBack) {
@@ -223,16 +240,17 @@ struct Cache {
     if constexpr (WSch == WriteScheme::WriteThrough) {
       mainMem.template writeBlock(addr, block);
     }
+    ++totalAccessCount;     // update analytics
   }
 
   std::optional<uint32_t> findCacheEntry(uint32_t addr) {
     uint32_t tag = tagBits(addr);
     uint32_t setIdx = indexBits(addr);
-    uint32_t startingBlockIdx = setIdx * S;
+    uint32_t startingEntryIdx = setIdx * S;
     for (auto offset = 0; offset < S; offset++) {
-      const Entry &entry = entries[startingBlockIdx + offset];
+      const Entry &entry = entries[startingEntryIdx + offset];
       if (entry.valid && entry.tag == tag) {
-        return std::make_optional(startingBlockIdx + offset);
+        return std::make_optional(startingEntryIdx + offset);
       }
     }
     return {};
@@ -276,12 +294,15 @@ std::ostream& operator<<(std::ostream& os, const Block<W>& block) {
 }
 
 // cache pretty-printing
-template<uint32_t W, uint32_t S, uint32_t B, uint32_t N, WriteScheme WSch>
-std::ostream& operator<<(std::ostream& os, const Cache<W, S, B, N, WSch> &cache) {
+template<uint32_t W, uint32_t S, uint32_t B, uint32_t N, WriteScheme WSch, ReplacementPolicy Plc>
+std::ostream& operator<<(std::ostream& os, const Cache<W, S, B, N, WSch, Plc> &cache) {
   os << std::string(60, '-') << "\n";
   os << std::setw(8) << "status" << " | ";
   os << std::setw(8) << "dirty" << " | ";
   os << std::setw(8) << "tag" << " | ";
+  if constexpr (Plc == ReplacementPolicy::PreciseLRU) {
+    os << std::setw(8) << "lru bits" << " | ";
+  }
   os << "block" << "\n";
   for (auto entryIdx = 0; entryIdx < B; entryIdx++) {
     if (entryIdx % S == 0) {
@@ -291,6 +312,9 @@ std::ostream& operator<<(std::ostream& os, const Cache<W, S, B, N, WSch> &cache)
     os << std::setw(8) << (entry.valid ? "valid" : "invalid") << " | ";
     os << std::setw(8) << (entry.dirty ? "yes" : "no") << " | ";
     os << std::setw(8) << std::hex << entry.tag << " | ";
+    if constexpr (Plc == ReplacementPolicy::PreciseLRU) {
+      os << std::setw(8) << std::dec << entry.lastAccessedTime << " | ";
+    }
     os << entry.block << "\n";
   }
   os << std::string(60, '-');
@@ -300,7 +324,7 @@ std::ostream& operator<<(std::ostream& os, const Cache<W, S, B, N, WSch> &cache)
 int main() {
   // Write-Back Write-Allocate
   MainMemory<8> mem;
-  Cache<4, 2, 4, 8, WriteScheme::WriteBack> cache{ mem };
+  Cache<4, 2, 4, 8, WriteScheme::WriteBack, ReplacementPolicy::PreciseLRU> cache{ mem };
 
   cache.writeBlock(0x10, Block<1>({0xDEADBEEFu}));
   std::cout << cache << std::endl;
