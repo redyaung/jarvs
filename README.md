@@ -7,5 +7,4 @@
 
 ## testing
 1. complete the steps in the section "building"
-2. go to the build directory `/build`.
-3. run `ctest`
+2. run `ctest --test-dir build`
