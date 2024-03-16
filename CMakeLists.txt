@@ -25,6 +25,7 @@ enable_testing()
 add_executable(
   simulator_test
   tests/memory_test.cpp
+  tests/processor_test.cpp
 )
 target_link_libraries(
   simulator_test

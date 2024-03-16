@@ -22,20 +22,35 @@ constexpr uint32_t nbytes(uint32_t nwords) {
   return nwords * 4;
 }
 
-// 32-bit word
+// 32-bit word - make float conversions explicit as they are uncommon
 struct Word {
   std::byte bytes[nbytes(1)];
 
-  Word(uint32_t value = 0) {
+  constexpr Word() {
+    std::fill(bytes, bytes + nbytes(1), std::byte{0u});
+  }
+  constexpr Word(uint32_t value) : Word(from(value)) {}
+  explicit constexpr Word(float value) : Word(from(value)) {}
+
+  constexpr operator uint32_t() const { return to<uint32_t>(*this); }
+  explicit constexpr operator float() const { return to<float>(*this); }
+
+  template<typename T>
+  static constexpr Word from(T value) {
+    static_assert(sizeof(T) == 4);    // T must occupy 32 bytes
+    Word word;
     auto b = std::bit_cast<std::byte*>(&value);
-    // this probably only works for little endian
+    // todo: currently only works for little endian
     for (auto i = 0; i < nbytes(1); i++) {
-      bytes[i] = b[i];
+      word.bytes[i] = b[i];
     }
+    return word;
   }
 
-  operator uint32_t() const {
-    return std::bit_cast<uint32_t>(bytes);
+  template<typename T>
+  static constexpr T to(Word word) {
+    static_assert(sizeof(T) == 4);    // T must occupy 32 bytes
+    return std::bit_cast<T>(word.bytes);
   }
 };
 
