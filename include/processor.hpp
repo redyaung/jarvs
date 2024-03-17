@@ -51,16 +51,16 @@ struct Unit;
 // out-in synchronization: outputSignal >> inputSignal >> ...
 // only allow changes to occur through synced output signals
 struct InputSignal {
-  Word value;
+  Word val;
   Unit *unit;
 
   explicit InputSignal(Unit *unit) : unit{unit} {}
 };
 
 // can be synchronized to a number of InputSignals
-// changing output signal value: outputSignal << newValue
+// receiving a new value: outputSignal << newValue
 struct OutputSignal {
-  Word value;
+  Word val;
   std::vector<InputSignal*> syncedInputs;
 
   // assumes that each InputSignal is synced only ONCE with a particular OutputSignal
@@ -85,5 +85,28 @@ struct InSyncUnit : public Unit {
   void notifyInputChange() override { }
 };
 
+struct RegisterFileUnit : public OutOfSyncUnit {
+  InputSignal readRegister1{this};
+  InputSignal readRegister2{this};
+  InputSignal writeRegister{this};
+  InputSignal writeData{this};
+  InputSignal ctrlRegWrite{this};
+  OutputSignal readData1;
+  OutputSignal readData2;
+
+  // todo: perhaps we should make the RegisterFile fail silently as invalid
+  // inputs are not only possible but valid
+  RegisterFile<RegisterType::Integer> intRegs;
+
+  void operate() override;
+};
+
+// handles only addi, lw and sw (I and S-type instructions)
+struct ImmediateGenerator : public OutOfSyncUnit {
+  InputSignal instruction{this};
+  OutputSignal immediate;
+
+  void operate() override;
+};
 
 #endif

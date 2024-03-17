@@ -1,3 +1,4 @@
+#include "gmock/gmock-cardinalities.h"
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <cmath>
@@ -5,6 +6,8 @@
 #include "processor.hpp"
 
 namespace {
+  using ::testing::AtLeast;
+
   constexpr float tolerance = 1e-6;
 
   struct MockUnit : public Unit {
@@ -54,5 +57,63 @@ namespace {
     out << 0xCADu;
   }
 
+  TEST(RegisterFileUnitTest, BasicOperation) {
+    OutputSignal read1, read2, write, writeData, regWrite;
+    RegisterFileUnit registers;
+    MockUnit receiver;
+
+    // hook up signals and set up initial register values
+    read1 >> registers.readRegister1;
+    read2 >> registers.readRegister2;
+    write >> registers.writeRegister;
+    writeData >> registers.writeData;
+    regWrite >> registers.ctrlRegWrite;
+    registers.readData1 >> receiver.in1;
+    registers.readData2 >> receiver.in2;
+    registers.intRegs.regs[10u] = 0xDEADBEEFu;
+
+    // use AtLeast as if there are n signals between A and B, B is going to be
+    // notified n times whenever there is a change in A
+    EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
+    read1 << 10u;
+    EXPECT_EQ(receiver.in1.val, 0xDEADBEEFu);
+
+    EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
+    regWrite<< 1; writeData << 0xFACADEu; write << 10u;
+    EXPECT_EQ(receiver.in1.val, 0xFACADEu);
+  }
+
+  struct ImmediateGeneratorUnitTest : public testing::Test {
+  protected:
+    void SetUp() override {
+      instr >> immGen.instruction;
+      immGen.immediate >> receiver.in1;
+    }
+
+    OutputSignal instr;
+    ImmediateGenerator immGen;
+    MockUnit receiver;
+  };
+
+  // see Patterson-Hennessy section 2.5 (pg 93)
+  TEST_F(ImmediateGeneratorUnitTest, ITypeInstructions) {
+    uint32_t addi = 0b001111101000'00010'000'00001'0010011;   // addi x1, x2, 1000
+    EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
+    instr << addi;
+    EXPECT_EQ(receiver.in1.val, 1000);
+
+    uint32_t lw = 0b001111101000'00010'010'00001'0000011;     // lw x1, 1000(x2)
+    EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
+    instr << lw;
+    EXPECT_EQ(receiver.in1.val, 1000);
+  }
+
+  // see Patterson-Hennessy section 2.5 (pg 93)
+  TEST_F(ImmediateGeneratorUnitTest, STypeInstructions) {
+    uint32_t sw = 0b0011111'00001'00010'010'01000'0100011;    // sw x1, 1000(x2)
+    EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
+    instr << sw;
+    EXPECT_EQ(receiver.in1.val, 1000);
+  }
 }
 
