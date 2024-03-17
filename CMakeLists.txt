@@ -7,6 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_executable(
   simulator
   src/main.cpp
+  src/processor.cpp
 )
 target_include_directories(simulator
   PRIVATE ${PROJECT_SOURCE_DIR}/include
@@ -24,12 +25,14 @@ FetchContent_MakeAvailable(googletest)
 enable_testing()
 add_executable(
   simulator_test
+  src/processor.cpp
   tests/memory_test.cpp
   tests/processor_test.cpp
 )
 target_link_libraries(
   simulator_test
   GTest::gtest_main
+  GTest::gmock_main   # bring in Google Mock
 )
 target_include_directories(simulator_test
   PRIVATE ${PROJECT_SOURCE_DIR}/include

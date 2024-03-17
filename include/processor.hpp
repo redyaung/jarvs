@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <stdexcept>
 #include <type_traits>
+#include <vector>
 
 constexpr int registerCount = 32;
 
@@ -44,5 +45,45 @@ struct RegisterFile {
     regs[regNum] = Word(value);
   }
 };
+
+struct Unit;
+
+// out-in synchronization: outputSignal >> inputSignal >> ...
+// only allow changes to occur through synced output signals
+struct InputSignal {
+  Word value;
+  Unit *unit;
+
+  explicit InputSignal(Unit *unit) : unit{unit} {}
+};
+
+// can be synchronized to a number of InputSignals
+// changing output signal value: outputSignal << newValue
+struct OutputSignal {
+  Word value;
+  std::vector<InputSignal*> syncedInputs;
+
+  // assumes that each InputSignal is synced only ONCE with a particular OutputSignal
+  OutputSignal& operator>>(InputSignal &signal);
+  void operator<<(Word newValue);
+};
+
+struct Unit {
+  virtual void notifyInputChange() = 0;
+  // performs its functions according to input signals
+  virtual void operate() = 0;
+};
+
+// out-of-sync units immediately propagate input changes to its outputs
+struct OutOfSyncUnit : public Unit {
+  void notifyInputChange() override { operate(); }
+};
+
+// in-sync units only propagate input changes to its outputs when clock ticks
+//  - used in conjunction with OutOfSync units to simulate functional units
+struct InSyncUnit : public Unit {
+  void notifyInputChange() override { }
+};
+
 
 #endif
