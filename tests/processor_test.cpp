@@ -115,5 +115,24 @@ namespace {
     instr << sw;
     EXPECT_EQ(receiver.in1.val, 1000);
   }
+
+  TEST(MultiplexerTest, BasicOperation) {
+    OutputSignal in0, in1, ctrl;
+    Multiplexer mult;
+    MockUnit receiver;
+
+    in0 >> mult.input0;
+    in1 >> mult.input1;
+    ctrl >> mult.control;
+    mult.output >> receiver.in1;
+
+    EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
+    in0 << 0xDEADBEEFu; in1 << 0xFACADEu; ctrl << 0x0u;
+    EXPECT_EQ(receiver.in1.val, 0xDEADBEEFu);
+
+    EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
+    ctrl << 0x1u;
+    EXPECT_EQ(receiver.in1.val, 0xFACADEu);
+  }
 }
 

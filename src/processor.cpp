@@ -44,3 +44,7 @@ void ImmediateGenerator::operate() {
     // do nothing otherwise
   }
 }
+
+void Multiplexer::operate() {
+  output << (control.val == 0u ? input0.val : input1.val);
+}

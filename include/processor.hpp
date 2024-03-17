@@ -109,4 +109,15 @@ struct ImmediateGenerator : public OutOfSyncUnit {
   void operate() override;
 };
 
+// generic 2-way multiplexer
+struct Multiplexer : public OutOfSyncUnit {
+  InputSignal input0{this};
+  InputSignal input1{this};
+  InputSignal control{this};
+  OutputSignal output;
+
+  void operate() override;
+};
+
+
 #endif
