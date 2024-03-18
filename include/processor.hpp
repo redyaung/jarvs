@@ -149,7 +149,7 @@ struct ALUUnit : public OutOfSyncUnit {
 // we will most likely need output signal(s) that asserts when the memory unit has
 // finished its write or read operation
 // for now, only use main memory with an 8-bit address space
-struct MemoryUnit : public OutOfSyncUnit {
+struct DataMemoryUnit : public OutOfSyncUnit {
   InputSignal address{this};
   InputSignal writeData{this};
   InputSignal ctrlMemRead{this};

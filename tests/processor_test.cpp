@@ -240,7 +240,7 @@ namespace {
     EXPECT_EQ(receiver.in2.val, 1);
   }
 
-  struct MemoryUnitTest : public testing::Test {
+  struct DataMemoryUnitTest : public testing::Test {
   protected:
     void SetUp() override {
       addr >> memUnit.address;
@@ -251,11 +251,11 @@ namespace {
     }
 
     OutputSignal addr, write, willRead, willWrite;
-    MemoryUnit memUnit;
+    DataMemoryUnit memUnit;
     MockUnit receiver;
   };
 
-  TEST_F(MemoryUnitTest, DoNothingOnDeassertedControlSignals) {
+  TEST_F(DataMemoryUnitTest, DoNothingOnDeassertedControlSignals) {
     EXPECT_CALL(receiver, notifyInputChange()).Times(0);
     willRead << 0; willWrite << 0;
     addr << 0xA0; write << 0xDEADBEEFu;
@@ -263,13 +263,13 @@ namespace {
   }
 
   // current behavior -- likely to change in the future (see class definition)
-  TEST_F(MemoryUnitTest, WriteToMemory) {
+  TEST_F(DataMemoryUnitTest, WriteToMemory) {
     EXPECT_CALL(receiver, notifyInputChange()).Times(0);
     willWrite << 1; addr << 0xA0; write << 0xDEADBEEFu;
     EXPECT_EQ(memUnit.memory.readBlock<1>(0xA0)[0], 0xDEADBEEFu);
   }
 
-  TEST_F(MemoryUnitTest, ReadFromMemory) {
+  TEST_F(DataMemoryUnitTest, ReadFromMemory) {
     EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
     memUnit.memory.writeBlock(0xA0, Block<1>{0xFACADEu});
     willRead << 1; addr << 0xA0;
