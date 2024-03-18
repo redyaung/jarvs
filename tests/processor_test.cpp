@@ -275,5 +275,23 @@ namespace {
     willRead << 1; addr << 0xA0;
     EXPECT_EQ(receiver.in1.val, 0xFACADEu);
   }
+
+  TEST(AndGateTest, BasicOperation) {
+    OutputSignal in0, in1;
+    AndGate andGate;
+    MockUnit receiver;
+
+    in0 >> andGate.input0;
+    in1 >> andGate.input1;
+    andGate.output >> receiver.in1;
+
+    EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
+    in0 << 1u; in1 << 1u;
+    EXPECT_EQ(receiver.in1.val, 1u);
+
+    EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
+    in0 << 0u; in1 << 1u;
+    EXPECT_EQ(receiver.in1.val, 0u);
+  }
 }
 

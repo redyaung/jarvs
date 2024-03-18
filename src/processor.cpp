@@ -93,3 +93,12 @@ void DataMemoryUnit::operate() {
     memory.writeBlock(address.val, Block<1>{writeData.val});
   }
 }
+
+void InstructionMemoryUnit::operate() {
+  Word readInstruction = memory.readBlock<1>(address.val)[0];
+  instruction << readInstruction;
+}
+
+void AndGate::operate() {
+  output << (input0.val & input1.val);
+}

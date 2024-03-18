@@ -161,4 +161,22 @@ struct DataMemoryUnit : public OutOfSyncUnit {
   void operate() override;
 };
 
+// 8-bit address space: no more than 256 instructions for now
+struct InstructionMemoryUnit : public OutOfSyncUnit {
+  InputSignal address{this};
+  OutputSignal instruction;
+
+  MainMemory<8> memory; 
+
+  void operate() override;
+};
+
+struct AndGate : public OutOfSyncUnit {
+  InputSignal input0{this};
+  InputSignal input1{this};
+  OutputSignal output;
+
+  void operate() override;
+};
+
 #endif
