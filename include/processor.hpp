@@ -97,7 +97,7 @@ struct DecodeUnit : public OutOfSyncUnit {
   void operate() override;
 };
 
-// handles only R-type, lw, sw and beq for now
+// handles only R-type, I-type, lw, sw and beq for now
 struct ControlUnit : public OutOfSyncUnit {
   InputSignal instruction{this};
   OutputSignal ctrlRegWrite;
@@ -152,7 +152,7 @@ enum class ALUOp : uint32_t {
 
 // the alu bits that control the alu are a departure from how alu bits actually work in
 // hardware (as described in Patterson-Hennessy)
-// only handles add, sub, beq, lw and sw
+// only handles add, addi, sub, beq, lw and sw
 struct ALUControl : public OutOfSyncUnit {
   // actually only need the func3 and func7 fields
   InputSignal instruction{this};

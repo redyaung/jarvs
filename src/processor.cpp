@@ -31,13 +31,14 @@ void DecodeUnit::operate() {
 void ControlUnit::operate() {
   uint32_t opcode = extractBits(instruction.val, 0, 6);
   bool isRType = (opcode == 0b0110011);
+  bool isIType = (opcode == 0b0010011);
   bool isLw = (opcode == 0b0000011);
   bool isSw = (opcode == 0b0100011);
   bool isBeq = (opcode == 0b1100011);
   // for some reason, this kind of conversion may be necessary
-  ctrlRegWrite << (isRType || isLw ? 0b1 : 0b0);
-  ctrlAluSrc << (isLw || isSw ? 0b1 : 0b0);
-  ctrlAluOp << (isBeq ? 0b01 : (isRType ? 0b10 : 0b00));
+  ctrlRegWrite << (isRType || isLw || isIType ? 0b1 : 0b0);
+  ctrlAluSrc << (isLw || isSw || isIType ? 0b1 : 0b0);
+  ctrlAluOp << (isBeq ? 0b01 : (isRType || isIType ? 0b10 : 0b00));
   ctrlBranch << (isBeq ? 0b1 : 0b0);
   ctrlMemWrite << (isSw ? 0b1 : 0b0);
   ctrlMemRead << (isLw ? 0b1 : 0b0);

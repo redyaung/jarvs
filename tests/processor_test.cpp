@@ -353,5 +353,63 @@ namespace {
     EXPECT_EQ(processor.registers.intRegs.readRegister(1), 13);
   }
 
+  TEST(PipelinedProcessorTest, SubInstruction) {
+    PipelinedProcessor processor;
+
+    uint32_t sub = 0b0100000'00011'00010'000'00001'0110011;   // sub x1, x2, x3
+    processor.instructionMemory.memory.writeBlock(0x0, Block<1>{sub});
+    processor.registers.intRegs.writeRegister(2, 6);
+    processor.registers.intRegs.writeRegister(3, 7);
+
+    for (int cycle = 0; cycle < 5; cycle++) {
+      processor.executeOneCycle();
+    }
+    EXPECT_EQ(processor.registers.intRegs.readRegister(1), -1);
+  }
+
+  TEST(PipelinedProcessorTest, AddImmediateInstruction) {
+    PipelinedProcessor processor;
+
+    uint32_t addi = 0b001111101000'00010'000'00001'0010011;   // addi x1, x2, 1000
+    processor.instructionMemory.memory.writeBlock(0x0, Block<1>{addi});
+    processor.registers.intRegs.writeRegister(2, 24u);
+
+    for (int cycle = 0; cycle < 5; cycle++) {
+      processor.executeOneCycle();
+    }
+    EXPECT_EQ(processor.registers.intRegs.readRegister(1), 1024u);
+  }
+
+  TEST(PipelinedProcessorTest, LoadInstruction) {
+    PipelinedProcessor processor;
+
+    // load the value at memory address 0x10 + 4 = 0x14 into x1
+    uint32_t lw = 0b000000000100'00010'010'00001'0000011;     // lw x1, 4(x2)
+    processor.instructionMemory.memory.writeBlock(0x0, Block<1>{lw});
+    processor.registers.intRegs.writeRegister(2, 0x10); 
+    processor.dataMemory.memory.writeBlock(0x14, Block<1>{0xBEEFu});
+
+    for (int cycle = 0; cycle < 5; cycle++) {
+      processor.executeOneCycle();
+    }
+    EXPECT_EQ(processor.registers.intRegs.readRegister(1), 0xBEEFu);
+  }
+
+  TEST(PipelinedProcessorTest, StoreInstruction) {
+    PipelinedProcessor processor;
+
+    // store 0xFACADEu at the memory address 0x10 + 4 = 0x14
+    uint32_t sw = 0b0000000'00001'00010'010'00100'0100011;    // sw x1, 4(x2)
+    processor.instructionMemory.memory.writeBlock(0x0, Block<1>{sw});
+    processor.registers.intRegs.writeRegister(1, 0xFACADEu); 
+    processor.registers.intRegs.writeRegister(2, 0x10u);
+
+    // only need the MEM stage to complete
+    for (int cycle = 0; cycle < 4; cycle++) {
+      processor.executeOneCycle();
+    }
+    EXPECT_EQ(processor.dataMemory.memory.readBlock<1>(0x14u)[0], 0xFACADEu);
+  }
+
 }
 
