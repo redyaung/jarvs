@@ -179,4 +179,52 @@ struct AndGate : public OutOfSyncUnit {
   void operate() override;
 };
 
+struct IFIDRegisters : public InSyncUnit {
+  InputSignal pcIn{this};
+  InputSignal instructionIn{this};
+
+  OutputSignal pcOut;
+  OutputSignal instructionOut;
+
+  void operate() override;
+};
+
+struct IDEXRegisters : public InSyncUnit {
+  InputSignal readData1In{this};
+  InputSignal readData2In{this};
+  InputSignal immediateIn{this};
+  InputSignal instructionIn{this};
+
+  OutputSignal readData1Out;
+  OutputSignal readData2Out;
+  OutputSignal immediateOut;
+  OutputSignal instructionOut;
+
+  void operate() override;
+};
+
+struct EXMEMRegisters : public InSyncUnit {
+  InputSignal branchAdderOutputIn{this};
+  InputSignal zeroIn{this};
+  InputSignal aluOutputIn{this};
+  InputSignal readData2In{this};
+
+  OutputSignal branchAdderOutputOut;
+  OutputSignal zeroOut;
+  OutputSignal aluOutputOut;
+  OutputSignal readData2Out;
+
+  void operate() override;
+};
+
+struct MEMWBRegisters : public InSyncUnit {
+  InputSignal readMemoryDataIn{this};
+  InputSignal aluOutputIn{this};
+
+  OutputSignal readMemoryDataOut;
+  OutputSignal aluOutputOut;
+
+  void operate() override;
+};
+
 #endif

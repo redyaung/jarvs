@@ -102,3 +102,27 @@ void InstructionMemoryUnit::operate() {
 void AndGate::operate() {
   output << (input0.val & input1.val);
 }
+
+void IFIDRegisters::operate() {
+  pcOut << pcIn.val;
+  instructionOut << instructionIn.val;
+}
+
+void IDEXRegisters::operate() {
+  readData1Out << readData1In.val;
+  readData2Out << readData2In.val;
+  immediateOut << immediateIn.val;
+  instructionOut << instructionIn.val;
+}
+
+void EXMEMRegisters::operate() {
+  branchAdderOutputOut << branchAdderOutputIn.val;
+  zeroOut << zeroIn.val;
+  aluOutputOut << aluOutputIn.val;
+  readData2Out << readData2In.val;
+}
+
+void MEMWBRegisters::operate() {
+  readMemoryDataOut << readMemoryDataIn.val;
+  aluOutputOut << aluOutputIn.val;
+}

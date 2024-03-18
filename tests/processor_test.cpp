@@ -293,5 +293,27 @@ namespace {
     in0 << 0u; in1 << 1u;
     EXPECT_EQ(receiver.in1.val, 0u);
   }
+
+  // here, we use MEM/WB pipeline registers but this choice is arbitrary
+  TEST(PipelineRegisterTest, PropagatesOnlyOnClockEdge) {
+    OutputSignal read, alu;
+    MEMWBRegisters pRegisters;
+    MockUnit receiver;
+
+    read >> pRegisters.readMemoryDataIn;
+    alu >> pRegisters.aluOutputIn;
+    pRegisters.readMemoryDataOut >> receiver.in1;
+    pRegisters.aluOutputOut >> receiver.in2;
+
+    EXPECT_CALL(receiver, notifyInputChange()).Times(0);
+    read << 0xDEADu; alu << 0xFACADEu;
+    EXPECT_EQ(receiver.in1.val, 0x0u);
+    EXPECT_EQ(receiver.in2.val, 0x0u);
+
+    EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
+    pRegisters.operate();   // normally called by a processor
+    EXPECT_EQ(receiver.in1.val, 0xDEADu);
+    EXPECT_EQ(receiver.in2.val, 0xFACADEu);
+  }
 }
 
