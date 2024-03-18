@@ -119,5 +119,31 @@ struct Multiplexer : public OutOfSyncUnit {
   void operate() override;
 };
 
+// only support a limited set of operations now
+enum class ALUOp : uint32_t {
+  Add, Sub, And, Or
+};
+
+// the alu bits that control the alu are a departure from how alu bits actually work in
+// hardware (as described in Patterson-Hennessy)
+// only handles add, sub, beq, lw and sw
+struct ALUControl : public OutOfSyncUnit {
+  // actually only need the func3 and func7 fields
+  InputSignal instruction{this};
+  InputSignal ctrlAluOp{this};
+  OutputSignal aluOp;
+
+  void operate() override;
+};
+
+struct ALUUnit : public OutOfSyncUnit {
+  InputSignal input0{this};
+  InputSignal input1{this};
+  InputSignal aluOp{this};
+  OutputSignal output;
+  OutputSignal zero;
+
+  void operate() override;
+};
 
 #endif

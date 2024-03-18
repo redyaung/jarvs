@@ -48,3 +48,38 @@ void ImmediateGenerator::operate() {
 void Multiplexer::operate() {
   output << (control.val == 0u ? input0.val : input1.val);
 }
+
+// refer to Patterson-Hennessy fig 4.12 (pg 270)
+void ALUControl::operate() {
+  if (ctrlAluOp.val == 0b00u) {         // lw or sw
+    aluOp << uint32_t(ALUOp::Add);
+  } else if (ctrlAluOp.val == 0b01u) {  // beq
+    aluOp << uint32_t(ALUOp::Sub);
+  } else if (ctrlAluOp.val == 0b10u) {  // R-type & I-type
+    uint32_t func7 = extractBits(instruction.val, 25, 31);
+    uint32_t func3 = extractBits(instruction.val, 12, 14);
+    if (func7 == 0x20u && func3 == 0x0u) {  // sub
+      aluOp << uint32_t(ALUOp::Sub);
+    } else if (func3 == 0x0u) {             // add, addi
+      aluOp << uint32_t(ALUOp::Add);
+    }
+  }
+}
+
+void ALUUnit::operate() {
+  switch (ALUOp{uint32_t(aluOp.val)}) {
+    case ALUOp::Add:
+      output << (int(input0.val) + int(input1.val));
+      break;
+    case ALUOp::Sub:
+      output << (int(input0.val) - int(input1.val));
+      break;
+    case ALUOp::And:
+      output << (int(input0.val) & int(input1.val));
+      break;
+    case ALUOp::Or:
+      output << (int(input0.val) | int(input1.val));
+      break;
+  }
+  zero << (output.val == 0u);
+}

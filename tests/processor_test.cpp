@@ -134,5 +134,110 @@ namespace {
     ctrl << 0x1u;
     EXPECT_EQ(receiver.in1.val, 0xFACADEu);
   }
+
+  // see Patterson-Hennessy fig 4.12 (pg 270) for instruction encodings
+  struct ALUControlTest : public testing::Test {
+  protected:
+    void SetUp() override {
+      instr >> aluCtrl.instruction;
+      aluOp >> aluCtrl.ctrlAluOp;
+      aluCtrl.aluOp >> receiver.in1;
+    }
+
+    OutputSignal instr, aluOp;
+    ALUControl aluCtrl;
+    MockUnit receiver;
+  };
+
+  TEST_F(ALUControlTest, Add) {
+    uint32_t add = 0b0000000'00011'00010'000'00001'0110011;
+    EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
+    instr << add; aluOp << 0b10u;
+    EXPECT_EQ(receiver.in1.val, uint32_t(ALUOp::Add));
+  }
+
+  TEST_F(ALUControlTest, Sub) {
+    uint32_t sub = 0b0100000'00011'00010'000'00001'0110011;
+    EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
+    instr << sub; aluOp << 0b10u;
+    EXPECT_EQ(receiver.in1.val, uint32_t(ALUOp::Sub));
+  }
+
+  TEST_F(ALUControlTest, Addi) {
+    uint32_t addi = 0b001111101000'00010'000'00001'0010011;
+    EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
+    instr << addi; aluOp << 0b10u;
+    EXPECT_EQ(receiver.in1.val, uint32_t(ALUOp::Add));
+  }
+
+  TEST_F(ALUControlTest, Lw) {
+    uint32_t lw = 0b001111101000'00010'010'00001'0000011;
+    EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
+    instr << lw; aluOp << 0b00u;
+    EXPECT_EQ(receiver.in1.val, uint32_t(ALUOp::Add));
+  }
+
+  // beq: opcode = 1100011, func3 = 0 -- imm = 0, x1, x2
+  TEST_F(ALUControlTest, Beq) {
+    uint32_t beq = 0b0000000'00001'00010'000'00000'1100011;
+    EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
+    instr << beq; aluOp << 0b01u;
+    EXPECT_EQ(receiver.in1.val, uint32_t(ALUOp::Sub));
+  }
+
+  struct ALUUnitTest : public testing::Test {
+  protected:
+    void SetUp() override {
+      in0 >> alu.input0;
+      in1 >> alu.input1;
+      op >> alu.aluOp;
+      alu.output >> receiver.in1;
+      alu.zero >> receiver.in2;
+    }
+
+    OutputSignal in0, in1, op;
+    ALUUnit alu;
+    MockUnit receiver;
+  };
+
+  TEST_F(ALUUnitTest, ArithmeticOperations) {
+    EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
+    in0 << 14; in1 << 8; op << uint32_t(ALUOp::Add);
+    EXPECT_EQ(receiver.in1.val, 22);
+
+    EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
+    in0 << 14; in1 << 8; op << uint32_t(ALUOp::Sub);
+    EXPECT_EQ(receiver.in1.val, 6);
+
+    EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
+    in0 << 8; in1 << 14; op << uint32_t(ALUOp::Sub);
+    EXPECT_EQ(int(receiver.in1.val), -6);
+  }
+
+  TEST_F(ALUUnitTest, LogicalOperations) {
+    EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
+    in0 << 1u; in1 << 0u; op << uint32_t(ALUOp::And);
+    EXPECT_EQ(receiver.in1.val, 0);   // 1 & 0 = 0
+
+    EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
+    in0 << 1u; in1 << 1u; op << uint32_t(ALUOp::And);
+    EXPECT_EQ(receiver.in1.val, 1);   // 1 & 1 = 1
+
+    EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
+    in0 << 1u; in1 << 0u; op << uint32_t(ALUOp::Or);
+    EXPECT_EQ(receiver.in1.val, 1);   // 1 | 0 = 1
+  }
+
+  TEST_F(ALUUnitTest, ZeroOutput) {
+    EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
+    in0 << 8; in1 << 8; op << uint32_t(ALUOp::Sub);
+    EXPECT_EQ(receiver.in1.val, 0);
+    EXPECT_EQ(receiver.in2.val, 1);
+
+    EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
+    in0 << 0; in1 << 1; op << uint32_t(ALUOp::And);
+    EXPECT_EQ(receiver.in1.val, 0);
+    EXPECT_EQ(receiver.in2.val, 1);
+  }
 }
 
