@@ -146,4 +146,19 @@ struct ALUUnit : public OutOfSyncUnit {
   void operate() override;
 };
 
+// we will most likely need output signal(s) that asserts when the memory unit has
+// finished its write or read operation
+// for now, only use main memory with an 8-bit address space
+struct MemoryUnit : public OutOfSyncUnit {
+  InputSignal address{this};
+  InputSignal writeData{this};
+  InputSignal ctrlMemRead{this};
+  InputSignal ctrlMemWrite{this};
+  OutputSignal readData;
+
+  MainMemory<8> memory;
+
+  void operate() override;
+};
+
 #endif

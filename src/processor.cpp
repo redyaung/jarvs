@@ -83,3 +83,13 @@ void ALUUnit::operate() {
   }
   zero << (output.val == 0u);
 }
+
+// won't read and write at the same time
+void MemoryUnit::operate() {
+  if (ctrlMemRead.val) {
+    Word readWord = memory.readBlock<1>(address.val)[0];
+    readData << readWord;
+  } else if (ctrlMemWrite.val) {
+    memory.writeBlock(address.val, Block<1>{writeData.val});
+  }
+}
