@@ -283,3 +283,198 @@ void PipelinedProcessor::synchronizeSignals() {
   MEM_WB.readMemoryDataOut >> writeBackSrcChooser.input1;
   MEM_WB.ctrlMemToRegOut >> writeBackSrcChooser.control;
 }
+
+std::ostream& operator<<(std::ostream& os, const InputSignal &input) {
+  os << "input signal [val = " << input.val << " (0x" << std::hex << input.val << ")]";
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const OutputSignal &output) {
+  os << "output signal [val = " << output.val << " (0x" << std::hex << output.val << ")";
+  os << ", #sync-ed inputs = " << output.syncedInputs.size() << "]";
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const DecodeUnit &decoder) {
+  os << "in DecodeUnit: " << std::endl;
+  os << "\t" << "instruction: " << decoder.instruction << std::endl;
+  os << "\t" << "readRegister1: " << decoder.readRegister1 << std::endl;
+  os << "\t" << "readRegister2: " << decoder.readRegister2 << std::endl;
+  os << "\t" << "writeRegister: " << decoder.writeRegister << std::endl;
+  os << "\t" << "func3: " << decoder.func3 << std::endl;
+  os << "\t" << "func7: " << decoder.func7;
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const ControlUnit &control) {
+  os << "in ControlUnit: " << std::endl;
+  os << "\t" << "instruction: " << control.instruction << std::endl;
+  os << "\t" << "ctrlRegWrite: " << control.ctrlRegWrite << std::endl;
+  os << "\t" << "ctrlAluSrc: " << control.ctrlAluSrc << std::endl;
+  os << "\t" << "ctrlAluOp: " << control.ctrlAluOp << std::endl;
+  os << "\t" << "ctrlBranch: " << control.ctrlBranch << std::endl;
+  os << "\t" << "ctrlMemWrite: " << control.ctrlMemWrite << std::endl;
+  os << "\t" << "ctrlMemRead: " << control.ctrlMemRead << std::endl;
+  os << "\t" << "ctrlMemToReg: " << control.ctrlMemToReg;
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const RegisterFileUnit &registers) {
+  os << "in RegisterFileUnit: " << std::endl;
+  os << "\t" << "readRegister1: " << registers.readRegister1 << std::endl;
+  os << "\t" << "readRegister2: " << registers.readRegister2 << std::endl;
+  os << "\t" << "writeRegister: " << registers.writeRegister << std::endl;
+  os << "\t" << "writeData: " << registers.writeData << std::endl;
+  os << "\t" << "ctrlRegWrite: " << registers.ctrlRegWrite << std::endl;
+  os << "\t" << "readData1: " << registers.readData1 << std::endl;
+  os << "\t" << "readData2: " << registers.readData2;
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const ImmediateGenerator &immGen) {
+  os << "in ImmediateGenerator: " << std::endl;
+  os << "\t" << "instruction: " << immGen.instruction << std::endl;
+  os << "\t" << "immediate: " << immGen.immediate;
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const Multiplexer &mux) {
+  os << "in Multiplexer: " << std::endl;
+  os << "\t" << "input0: " << mux.input0 << std::endl;
+  os << "\t" << "input1: " << mux.input1 << std::endl;
+  os << "\t" << "control: " << mux.control << std::endl;
+  os << "\t" << "output: " << mux.output;
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const ALUControl &aluControl) {
+  os << "in ALUControl: " << std::endl;
+  os << "\t" << "instruction: " << aluControl.instruction << std::endl;
+  os << "\t" << "ctrlAluOp: " << aluControl.ctrlAluOp << std::endl;
+  os << "\t" << "aluOp: " << aluControl.aluOp;
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const ALUUnit &alu) {
+  os << "in ALUUnit: " << std::endl;
+  os << "\t" << "input0: " << alu.input0 << std::endl;
+  os << "\t" << "input1: " << alu.input1 << std::endl;
+  os << "\t" << "aluOp: " << alu.aluOp << std::endl;
+  os << "\t" << "output: " << alu.output << std::endl;
+  os << "\t" << "zero: " << alu.zero;
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const DataMemoryUnit &dataMemory) {
+  os << "in DataMemoryUnit: " << std::endl;
+  os << "\t" << "address: " << dataMemory.address << std::endl;
+  os << "\t" << "writeData: " << dataMemory.writeData << std::endl;
+  os << "\t" << "ctrlMemRead: " << dataMemory.ctrlMemRead << std::endl;
+  os << "\t" << "ctrlMemWrite: " << dataMemory.ctrlMemWrite << std::endl;
+  os << "\t" << "readData: " << dataMemory.readData;
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const InstructionMemoryUnit &instructionMemory) {
+  os << "in InstructionMemoryUnit: " << std::endl;
+  os << "\t" << "address: " << instructionMemory.address << std::endl;
+  os << "\t" << "instruction: " << instructionMemory.instruction;
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const AndGate &gate) {
+  os << "in AndGate: " << std::endl;
+  os << "\t" << "input0: " << gate.input0 << std::endl;
+  os << "\t" << "input1: " << gate.input1 << std::endl;
+  os << "\t" << "output: " << gate.output;
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const IFIDRegisters &IF_ID) {
+  os << "in IFIDRegisters: " << std::endl;
+  // os << "\t" << "pcIn: " << IF_ID.pcIn << std::endl;
+  // os << "\t" << "instructionIn: " << IF_ID.instructionIn << std::endl;
+  os << "\t" << "pcOut: " << IF_ID.pcOut << std::endl;
+  os << "\t" << "instructionOut: " << IF_ID.instructionOut;
+  return os;
+}
+
+// ignore the In signals in pipeline registers (for pretty-printing)
+std::ostream& operator<<(std::ostream& os, const IDEXRegisters &ID_EX) {
+  os << "in IDEXRegisters: " << std::endl;
+  os << "\t" << "readData1Out: " << ID_EX.readData1Out << std::endl;
+  os << "\t" << "readData2Out: " << ID_EX.readData2Out << std::endl;
+  os << "\t" << "immediateOut: " << ID_EX.immediateOut << std::endl;
+  os << "\t" << "instructionOut: " << ID_EX.instructionOut << std::endl;
+  os << "\t" << "ctrlAluSrcOut: " << ID_EX.ctrlAluSrcOut << std::endl;
+  os << "\t" << "ctrlAluOpOut: " << ID_EX.ctrlAluOpOut << std::endl;
+  os << "\t" << "ctrlBranchOut: " << ID_EX.ctrlBranchOut << std::endl;
+  os << "\t" << "ctrlMemWriteOut: " << ID_EX.ctrlMemWriteOut << std::endl;
+  os << "\t" << "ctrlMemReadOut: " << ID_EX.ctrlMemReadOut << std::endl;
+  os << "\t" << "ctrlMemToRegOut: " << ID_EX.ctrlMemToRegOut << std::endl;
+  os << "\t" << "ctrlRegWriteOut: " << ID_EX.ctrlRegWriteOut << std::endl;
+  os << "\t" << "writeRegisterOut: " << ID_EX.writeRegisterOut << std::endl;
+  os << "\t" << "pcOut: " << ID_EX.pcOut;
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const EXMEMRegisters &EX_MEM) {
+  os << "in EXMEMRegisters: " << std::endl;
+  os << "\t" << "branchAdderOutputOut: " << EX_MEM.branchAdderOutputOut << std::endl;
+  os << "\t" << "zeroOut: " << EX_MEM.zeroOut << std::endl;
+  os << "\t" << "aluOutputOut: " << EX_MEM.aluOutputOut << std::endl;
+  os << "\t" << "readData2Out: " << EX_MEM.readData2Out << std::endl;
+  os << "\t" << "ctrlBranchOut: " << EX_MEM.ctrlBranchOut << std::endl;
+  os << "\t" << "ctrlMemWriteOut: " << EX_MEM.ctrlMemWriteOut << std::endl;
+  os << "\t" << "ctrlMemReadOut: " << EX_MEM.ctrlMemReadOut << std::endl;
+  os << "\t" << "ctrlMemToRegOut: " << EX_MEM.ctrlMemToRegOut << std::endl;
+  os << "\t" << "ctrlRegWriteOut: " << EX_MEM.ctrlRegWriteOut << std::endl;
+  os << "\t" << "writeRegisterOut: " << EX_MEM.writeRegisterOut;
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const MEMWBRegisters &MEM_WB) {
+  os << "in MEMWBRegisters: " << std::endl;
+  os << "\t" << "readMemoryDataOut: " << MEM_WB.readMemoryDataOut << std::endl;
+  os << "\t" << "aluOutputOut: " << MEM_WB.aluOutputOut << std::endl;
+  os << "\t" << "ctrlMemToRegOut: " << MEM_WB.ctrlMemToRegOut << std::endl;
+  os << "\t" << "ctrlRegWriteOut: " << MEM_WB.ctrlRegWriteOut << std::endl;
+  os << "\t" << "writeRegisterOut: " << MEM_WB.writeRegisterOut;
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const InstructionIssueUnit &issueUnit) {
+  os << "in InstructionIssueUnit: " << std::endl;
+  os << "\t" << "pcOut: " << issueUnit.pcOut;
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const PipelinedProcessor &processor) {
+  os << "pipelined processor" << std::endl;
+  os << "\t" << "clock cycle = " << processor.clockCycle << std::endl;
+
+  os << "pcChooser: " << processor.pcChooser << std::endl;
+  os << "issueUnit: " << processor.issueUnit << std::endl;
+  os << "pcAdder: " << processor.pcAdder << std::endl;
+  os << "instructionMemory: " << processor.instructionMemory << std::endl;
+
+  os << "IF_ID: " << processor.IF_ID << std::endl;
+  os << "decoder: " << processor.decoder << std::endl;
+  os << "control: " << processor.control << std::endl;
+  os << "registers: " << processor.registers << std::endl;
+  os << "immGen: " << processor.immGen << std::endl;
+
+  os << "ID_EX: " << processor.ID_EX << std::endl;
+  os << "branchAdder: " << processor.branchAdder << std::endl;
+  os << "aluSrc2Chooser: " << processor.aluSrc2Chooser << std::endl;
+  os << "alu: " << processor.alu << std::endl;
+  os << "aluControl: " << processor.aluControl << std::endl;
+
+  os << "EX_MEM: " << processor.EX_MEM << std::endl;
+  os << "branchChooser: " << processor.branchChooser << std::endl;
+  os << "dataMemory: " << processor.dataMemory << std::endl;
+
+  os << "MEM_WB: " << processor.MEM_WB << std::endl;
+  os << "writeBackSrcChooser: " << processor.writeBackSrcChooser;
+  return os;
+}

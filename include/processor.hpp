@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <type_traits>
 #include <vector>
+#include <ostream>
 
 constexpr int registerCount = 32;
 
@@ -346,5 +347,29 @@ struct PipelinedProcessor : public Processor {
   void registerInSyncUnits();   // should only be called ONCE by constructor
   void synchronizeSignals();    // should also be called ONCE by constructor
 };
+
+// ostream& operator<<(ostream& os, const Date& dt)
+
+// pretty-printing funcs for the signals and functional units
+std::ostream& operator<<(std::ostream& os, const InputSignal &input);
+std::ostream& operator<<(std::ostream& os, const OutputSignal &output);
+
+std::ostream& operator<<(std::ostream& os, const DecodeUnit &decoder);
+std::ostream& operator<<(std::ostream& os, const ControlUnit &control);
+std::ostream& operator<<(std::ostream& os, const RegisterFileUnit &registers);
+std::ostream& operator<<(std::ostream& os, const ImmediateGenerator &immGen);
+std::ostream& operator<<(std::ostream& os, const Multiplexer &mux);
+std::ostream& operator<<(std::ostream& os, const ALUControl &aluControl);
+std::ostream& operator<<(std::ostream& os, const ALUUnit &alu);
+std::ostream& operator<<(std::ostream& os, const DataMemoryUnit &dataMemory);
+std::ostream& operator<<(std::ostream& os, const InstructionMemoryUnit &instructionMemory);
+std::ostream& operator<<(std::ostream& os, const AndGate &andGate);
+std::ostream& operator<<(std::ostream& os, const IFIDRegisters &IF_ID);
+std::ostream& operator<<(std::ostream& os, const IDEXRegisters &ID_EX);
+std::ostream& operator<<(std::ostream& os, const EXMEMRegisters &EX_MEM);
+std::ostream& operator<<(std::ostream& os, const MEMWBRegisters &MEM_WB);
+std::ostream& operator<<(std::ostream& os, const InstructionIssueUnit &issueUnit);
+
+std::ostream& operator<<(std::ostream& os, const PipelinedProcessor &processor);
 
 #endif

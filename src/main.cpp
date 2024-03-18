@@ -1,34 +1,18 @@
 #include <iostream>
-#include "memory.hpp"
+#include "processor.hpp"
 
 int main() {
-  // Write-Back Write-Allocate
-  Cache<4, 4, 4, 8, WriteScheme::WriteBack, ReplacementPolicy::ApproximateLRU> cache { 
-    MainMemory<8> {}
-  };
+  PipelinedProcessor processor;
 
-  cache.writeBlock(0x10, Block<1>({0xDEADBEEFu}));
-  std::cout << cache << std::endl;
-  cache.writeBlock(0x14, Block<1>({0xFACADEu}));
-  std::cout << cache << std::endl;
+  uint32_t addInstruction = 0b0000000'00011'00010'000'00001'0110011;   // add x1, x2, x3
+  processor.instructionMemory.memory.writeBlock(0x0, Block<1>{addInstruction});
+  processor.registers.intRegs.writeRegister(2, 6);
+  processor.registers.intRegs.writeRegister(3, 7);
 
-  Block w = cache.readBlock<1>(0x10);
-  assert(uint32_t(w[0]) == 0xDEADBEEFu);
-  std::cout << cache << std::endl;
-
-  w = cache.readBlock<1>(0x14);
-  assert(uint32_t(w[0]) == 0xFACADEu);
-  std::cout << cache << std::endl;
-
-  cache.writeBlock(0x30, Block<1>({0x3}));
-  std::cout << cache << std::endl;
-  cache.writeBlock(0x50, Block<1>({0x5}));
-  std::cout << cache << std::endl;
-
-  cache.writeBlock(0x70, Block<1>({0x7}));
-  std::cout << cache << std::endl;
-  cache.writeBlock(0x90, Block<1>({0x9}));
-  std::cout << cache << std::endl;
+  for (int cycle = 0; cycle < 5; cycle++) {
+    processor.executeOneCycle();
+    std::cout << processor << std::endl << std::endl;
+  }
 
   return 0;
 }
