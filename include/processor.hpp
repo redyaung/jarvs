@@ -81,8 +81,34 @@ struct OutOfSyncUnit : public Unit {
 
 // in-sync units only propagate input changes to its outputs when clock ticks
 //  - used in conjunction with OutOfSync units to simulate functional units
+//  - the Processor is responsible for synchronizing InSyncUnits to the clock
 struct InSyncUnit : public Unit {
   void notifyInputChange() override { }
+};
+
+struct DecodeUnit : public OutOfSyncUnit {
+  InputSignal instruction{this};
+  OutputSignal readRegister1;
+  OutputSignal readRegister2;
+  OutputSignal writeRegister;
+  OutputSignal func3;
+  OutputSignal func7;
+
+  void operate() override;
+};
+
+// handles only R-type, lw, sw and beq for now
+struct ControlUnit : public OutOfSyncUnit {
+  InputSignal instruction{this};
+  OutputSignal ctrlRegWrite;
+  OutputSignal ctrlAluSrc;
+  OutputSignal ctrlAluOp;
+  OutputSignal ctrlBranch;
+  OutputSignal ctrlMemWrite;
+  OutputSignal ctrlMemRead;
+  OutputSignal ctrlMemToReg;
+
+  void operate() override;
 };
 
 struct RegisterFileUnit : public OutOfSyncUnit {
@@ -189,6 +215,7 @@ struct IFIDRegisters : public InSyncUnit {
   void operate() override;
 };
 
+// error-prone list of control signals (todo: is there a better way?)
 struct IDEXRegisters : public InSyncUnit {
   InputSignal readData1In{this};
   InputSignal readData2In{this};
@@ -199,6 +226,26 @@ struct IDEXRegisters : public InSyncUnit {
   OutputSignal readData2Out;
   OutputSignal immediateOut;
   OutputSignal instructionOut;
+
+  InputSignal ctrlAluSrcIn{this};
+  InputSignal ctrlAluOpIn{this};
+  InputSignal ctrlBranchIn{this};
+  InputSignal ctrlMemWriteIn{this};
+  InputSignal ctrlMemReadIn{this};
+  InputSignal ctrlMemToRegIn{this};
+  InputSignal ctrlRegWriteIn{this};
+  InputSignal writeRegisterIn{this};
+  InputSignal pcIn{this};
+
+  OutputSignal ctrlAluSrcOut;
+  OutputSignal ctrlAluOpOut;
+  OutputSignal ctrlBranchOut;
+  OutputSignal ctrlMemWriteOut;
+  OutputSignal ctrlMemReadOut;
+  OutputSignal ctrlMemToRegOut;
+  OutputSignal ctrlRegWriteOut;
+  OutputSignal writeRegisterOut;
+  OutputSignal pcOut;
 
   void operate() override;
 };
@@ -214,6 +261,20 @@ struct EXMEMRegisters : public InSyncUnit {
   OutputSignal aluOutputOut;
   OutputSignal readData2Out;
 
+  InputSignal ctrlBranchIn{this};
+  InputSignal ctrlMemWriteIn{this};
+  InputSignal ctrlMemReadIn{this};
+  InputSignal ctrlMemToRegIn{this};
+  InputSignal ctrlRegWriteIn{this};
+  InputSignal writeRegisterIn{this};
+
+  OutputSignal ctrlBranchOut;
+  OutputSignal ctrlMemWriteOut;
+  OutputSignal ctrlMemReadOut;
+  OutputSignal ctrlMemToRegOut;
+  OutputSignal ctrlRegWriteOut;
+  OutputSignal writeRegisterOut;
+
   void operate() override;
 };
 
@@ -224,7 +285,66 @@ struct MEMWBRegisters : public InSyncUnit {
   OutputSignal readMemoryDataOut;
   OutputSignal aluOutputOut;
 
+  InputSignal ctrlMemToRegIn{this};
+  InputSignal ctrlRegWriteIn{this};
+  InputSignal writeRegisterIn{this};
+
+  OutputSignal ctrlMemToRegOut;
+  OutputSignal ctrlRegWriteOut;
+  OutputSignal writeRegisterOut;
+
   void operate() override;
+};
+
+struct InstructionIssueUnit : public InSyncUnit {
+  InputSignal pcIn{this};
+  OutputSignal pcOut;
+
+  void operate() override;
+};
+
+// the processor is responsible for registering the InSyncUnits that it uses into
+// the syncedUnits list
+struct Processor {
+  std::vector<InSyncUnit*> syncedUnits;
+  int clockCycle = 0;
+
+  virtual void executeOneCycle() {
+    ++clockCycle;
+    for (InSyncUnit *unit : syncedUnits) {
+      unit->operate();
+    }
+  }
+};
+
+struct PipelinedProcessor : public Processor {
+  Multiplexer pcChooser;
+  InstructionIssueUnit issueUnit;
+  ALUUnit pcAdder;
+  InstructionMemoryUnit instructionMemory;
+
+  IFIDRegisters IF_ID;
+  DecodeUnit decoder;
+  ControlUnit control;
+  RegisterFileUnit registers;
+  ImmediateGenerator immGen;
+
+  IDEXRegisters ID_EX;
+  ALUUnit branchAdder;    // alu's default op is addition; reuse
+  Multiplexer aluSrc2Chooser;
+  ALUUnit alu;
+  ALUControl aluControl;
+
+  EXMEMRegisters EX_MEM;
+  AndGate branchChooser;
+  DataMemoryUnit dataMemory;
+
+  MEMWBRegisters MEM_WB;
+  Multiplexer writeBackSrcChooser;
+
+  PipelinedProcessor();
+  void registerInSyncUnits();   // should only be called ONCE by constructor
+  void synchronizeSignals();    // should also be called ONCE by constructor
 };
 
 #endif

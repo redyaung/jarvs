@@ -12,7 +12,7 @@ namespace {
 
   struct MockUnit : public Unit {
     // default initializer has to be brace or equals initializer
-    InputSignal in1{this}, in2{this};
+    InputSignal in1{this}, in2{this}, in3{this}, in4{this}, in5{this};
 
     MOCK_METHOD(void, notifyInputChange, (), (override));
     MOCK_METHOD(void, operate, (), (override));
@@ -55,6 +55,28 @@ namespace {
     // once from in1, once from in2
     EXPECT_CALL(receiver, notifyInputChange()).Times(2);
     out << 0xCADu;
+  }
+
+  TEST(DecodeUnitTest, DecodeRTypeInstruction) {
+    OutputSignal instr;
+    DecodeUnit decoder;
+    MockUnit receiver;
+
+    instr >> decoder.instruction;
+    decoder.readRegister1 >> receiver.in1;
+    decoder.readRegister2 >> receiver.in2;
+    decoder.writeRegister >> receiver.in3;
+    decoder.func3 >> receiver.in4;
+    decoder.func7 >> receiver.in5;
+
+    uint32_t add = 0b0000000'00011'00010'000'00001'0110011;   // add x1, x2, x3
+    EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
+    instr << add;
+    EXPECT_EQ(receiver.in1.val, 2);
+    EXPECT_EQ(receiver.in2.val, 3);
+    EXPECT_EQ(receiver.in3.val, 1);
+    EXPECT_EQ(receiver.in4.val, 0x0);
+    EXPECT_EQ(receiver.in5.val, 0x0);
   }
 
   TEST(RegisterFileUnitTest, BasicOperation) {
@@ -315,5 +337,21 @@ namespace {
     EXPECT_EQ(receiver.in1.val, 0xDEADu);
     EXPECT_EQ(receiver.in2.val, 0xFACADEu);
   }
+
+  TEST(PipelinedProcessorTest, AddInstruction) {
+    PipelinedProcessor processor;
+
+    uint32_t add = 0b0000000'00011'00010'000'00001'0110011;   // add x1, x2, x3
+    processor.instructionMemory.memory.writeBlock(0x0, Block<1>{add});
+    processor.registers.intRegs.writeRegister(2, 6);
+    processor.registers.intRegs.writeRegister(3, 7);
+
+    // execute for 5 cycles -- enough for write back stage of first instruction to complete
+    for (int cycle = 0; cycle < 5; cycle++) {
+      processor.executeOneCycle();
+    }
+    EXPECT_EQ(processor.registers.intRegs.readRegister(1), 13);
+  }
+
 }
 
