@@ -12,15 +12,11 @@
 #include <cstdlib>
 #include <iomanip>
 #include <string>
+#include "utils.hpp"
 
 // forward declarations
 bool isAligned(uint32_t addr, uint32_t nwords);
 uint32_t randInt(uint32_t min, uint32_t max);
-
-// constexpr function definitions
-constexpr uint32_t nbytes(uint32_t nwords) {
-  return nwords * 4;
-}
 
 // 32-bit word - make float conversions explicit as they are uncommon
 struct Word {

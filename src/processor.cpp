@@ -1,10 +1,6 @@
 #include "processor.hpp"
+#include "utils.hpp"
 #include <stdexcept>
-
-constexpr uint32_t extractBits(uint32_t val, int start, int end) {
-  uint32_t mask = ((1u << (end - start + 1)) - 1)<< start;
-  return (val & mask) >> start;
-}
 
 OutputSignal& OutputSignal::operator>>(InputSignal &signal) {
   syncedInputs.push_back(&signal);
