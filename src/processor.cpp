@@ -1,6 +1,7 @@
 #include "processor.hpp"
 #include "utils.hpp"
 #include <stdexcept>
+#include <ios>
 
 OutputSignal& OutputSignal::operator>>(InputSignal &signal) {
   syncedInputs.push_back(&signal);
@@ -148,6 +149,8 @@ void IDEXRegisters::operate() {
 }
 
 void EXMEMRegisters::operate() {
+  ctrlMemWriteOut << 0;     // avoid unintentional writes
+
   branchAdderOutputOut << branchAdderOutputIn.val;
   zeroOut << zeroIn.val;
   aluOutputOut << aluOutputIn.val;
@@ -162,12 +165,35 @@ void EXMEMRegisters::operate() {
 }
 
 void MEMWBRegisters::operate() {
+  ctrlRegWriteOut << 0;     // avoid unintentional writes
+
   readMemoryDataOut << readMemoryDataIn.val;
   aluOutputOut << aluOutputIn.val;
 
   ctrlMemToRegOut << ctrlMemToRegIn.val;
-  ctrlRegWriteOut << ctrlRegWriteIn.val;
   writeRegisterOut << writeRegisterIn.val;
+  // only assert the write control signal after other signals are properly set
+  ctrlRegWriteOut << ctrlRegWriteIn.val;
+}
+
+// synchronize the internal signals connecting buffer and out
+BufferedMEMWBRegisters::BufferedMEMWBRegisters() {
+  buffer.readMemoryDataOut >> out.readMemoryDataIn;
+  buffer.aluOutputOut >> out.aluOutputIn;
+
+  buffer.ctrlMemToRegOut >> out.ctrlMemToRegIn;
+  buffer.writeRegisterOut >> out.writeRegisterIn;
+  buffer.ctrlRegWriteOut >> out.ctrlRegWriteIn;
+}
+
+// propagate changes from buffer to out
+void BufferedMEMWBRegisters::bufferInputs() {
+  buffer.operate();
+}
+
+// propagate changes from out
+void BufferedMEMWBRegisters::operate() {
+  out.operate();
 }
 
 void InstructionIssueUnit::operate() {
@@ -176,15 +202,20 @@ void InstructionIssueUnit::operate() {
 
 PipelinedProcessor::PipelinedProcessor() {
   synchronizeSignals();
-  registerInSyncUnits();
+  registerUnits();
 }
 
-void PipelinedProcessor::registerInSyncUnits() {
-  syncedUnits.push_back(&MEM_WB);
+// the order determines the order in which these in-sync units are called
+void PipelinedProcessor::registerUnits() {
   syncedUnits.push_back(&EX_MEM);
   syncedUnits.push_back(&ID_EX);
   syncedUnits.push_back(&IF_ID);
   syncedUnits.push_back(&issueUnit);
+
+  // must be called last as otherwise, there's no point in buffering
+  syncedUnits.push_back(&MEM_WB);
+
+  bufferedUnits.push_back(&MEM_WB);
 }
 
 void PipelinedProcessor::synchronizeSignals() {
@@ -209,9 +240,9 @@ void PipelinedProcessor::synchronizeSignals() {
 
   decoder.readRegister1 >> registers.readRegister1;
   decoder.readRegister2 >> registers.readRegister2;
-  MEM_WB.writeRegisterOut >> registers.writeRegister;
+  MEM_WB.out.writeRegisterOut >> registers.writeRegister;
   writeBackSrcChooser.output >> registers.writeData;
-  MEM_WB.ctrlRegWriteOut >> registers.ctrlRegWrite;
+  MEM_WB.out.ctrlRegWriteOut >> registers.ctrlRegWrite;
 
   IF_ID.instructionOut >> immGen.instruction;
 
@@ -267,26 +298,28 @@ void PipelinedProcessor::synchronizeSignals() {
   EX_MEM.ctrlMemWriteOut >> dataMemory.ctrlMemWrite;
   EX_MEM.ctrlMemReadOut >> dataMemory.ctrlMemRead;
 
-  dataMemory.readData >> MEM_WB.readMemoryDataIn;
-  EX_MEM.aluOutputOut >> MEM_WB.aluOutputIn;
-  EX_MEM.writeRegisterOut >> MEM_WB.writeRegisterIn;
+  dataMemory.readData >> MEM_WB.buffer.readMemoryDataIn;
+  EX_MEM.aluOutputOut >> MEM_WB.buffer.aluOutputIn;
+  EX_MEM.writeRegisterOut >> MEM_WB.buffer.writeRegisterIn;
 
-  EX_MEM.ctrlMemToRegOut >> MEM_WB.ctrlMemToRegIn;
-  EX_MEM.ctrlRegWriteOut >> MEM_WB.ctrlRegWriteIn;
+  EX_MEM.ctrlMemToRegOut >> MEM_WB.buffer.ctrlMemToRegIn;
+  EX_MEM.ctrlRegWriteOut >> MEM_WB.buffer.ctrlRegWriteIn;
 
   // write-back stage
-  MEM_WB.aluOutputOut >> writeBackSrcChooser.input0;
-  MEM_WB.readMemoryDataOut >> writeBackSrcChooser.input1;
-  MEM_WB.ctrlMemToRegOut >> writeBackSrcChooser.control;
+  MEM_WB.out.aluOutputOut >> writeBackSrcChooser.input0;
+  MEM_WB.out.readMemoryDataOut >> writeBackSrcChooser.input1;
+  MEM_WB.out.ctrlMemToRegOut >> writeBackSrcChooser.control;
 }
 
 std::ostream& operator<<(std::ostream& os, const InputSignal &input) {
-  os << "input signal [val = " << input.val << " (0x" << std::hex << input.val << ")]";
+  os << "input signal [val = " << std::dec << input.val;
+  os << "(" << std::showbase << std::hex << input.val << std::dec << ")" << "]";
   return os;
 }
 
 std::ostream& operator<<(std::ostream& os, const OutputSignal &output) {
-  os << "output signal [val = " << output.val << " (0x" << std::hex << output.val << ")";
+  os << "output signal [val = " << std::dec << output.val;
+  os << "(" << std::showbase << std::hex << output.val << std::dec << ")";
   os << ", #sync-ed inputs = " << output.syncedInputs.size() << "]";
   return os;
 }
@@ -436,6 +469,13 @@ std::ostream& operator<<(std::ostream& os, const MEMWBRegisters &MEM_WB) {
   os << "\t" << "ctrlMemToRegOut: " << MEM_WB.ctrlMemToRegOut << std::endl;
   os << "\t" << "ctrlRegWriteOut: " << MEM_WB.ctrlRegWriteOut << std::endl;
   os << "\t" << "writeRegisterOut: " << MEM_WB.writeRegisterOut;
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const BufferedMEMWBRegisters &MEM_WB) {
+  os << "in BufferedMEMWBRegisters: " << std::endl;
+  os << "\t" << "buffer: " << MEM_WB.buffer << std::endl;
+  os << "\t" << "out: " << MEM_WB.out;
   return os;
 }
 

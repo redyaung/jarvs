@@ -39,16 +39,16 @@ namespace _Assembler {
   using ParsedInstruction = std::variant<R, I, S, U>;
 
   std::regex RFormatRegex(
-    "^([a-z]+) x(\\d{1,2}), x(\\d{1,2}), x(\\d{1,2})"
+    "^\\s*([a-z]+) x(\\d{1,2}), x(\\d{1,2}), x(\\d{1,2})"
   );
   std::regex IAndSFormatRegex(
-    "^([a-z]+) x(\\d{1,2}), x(\\d{1,2}), (\\d+)"
+    "^\\s*([a-z]+) x(\\d{1,2}), x(\\d{1,2}), (\\d+)"
   );
   std::regex LoadStoreRegex(
-    "^([a-z]+) x(\\d{1,2}), (\\d+)\\(x\\d{2}\\)"
+    "^\\s*([a-z]+) x(\\d{1,2}), (\\d+)\\(x(\\d{1,2})\\)"
   );
   std::regex UFormatRegex(
-    "^([a-z]+) x(\\d{1,2}), (\\d+)"
+    "^\\s*([a-z]+) x(\\d{1,2}), (\\d+)"
   );
 
   struct PossibleBitFields {
@@ -213,4 +213,16 @@ namespace _Assembler {
 
 Word encodeInstruction(const std::string &line) {
   return _Assembler::encodeInstruction(_Assembler::parseInstruction(line));
+}
+
+std::vector<Word> encodeInstructions(std::istream &is) {
+  std::vector<Word> encoded;
+  for (std::string line; std::getline(is, line); ) {
+    // skip empty lines
+    if (line == "") {
+      continue;
+    }
+    encoded.push_back(encodeInstruction(line));
+  }
+  return encoded;
 }

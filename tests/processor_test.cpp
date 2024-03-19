@@ -1,9 +1,11 @@
 #include "gmock/gmock-cardinalities.h"
+#include <array>
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <cmath>
 #include <gmock/gmock.h>
 #include "processor.hpp"
+#include "assembler.hpp"
 
 namespace {
   using ::testing::AtLeast;
@@ -409,6 +411,94 @@ namespace {
       processor.executeOneCycle();
     }
     EXPECT_EQ(processor.dataMemory.memory.readBlock<1>(0x14u)[0], 0xFACADEu);
+  }
+
+  TEST(PipelinedProcessorTest, MultipleAddInstructions) {
+    PipelinedProcessor processor;
+
+    std::vector<std::string> instructions {
+      "add x1, x2, x3",
+      "add x11, x12, x13",
+      "add x0, x0, x0",   // nop
+      "add x0, x0, x0",   // nop
+      "add x21, x1, x11"
+    };
+    for (auto i = 0; i < instructions.size(); ++i) {
+      Word encoded = encodeInstruction(instructions[i]);
+      processor.instructionMemory.memory.writeBlock(i * 4, Block<1>{encoded});
+    }
+    processor.registers.intRegs.writeRegister(2, 2);
+    processor.registers.intRegs.writeRegister(3, 3);
+    processor.registers.intRegs.writeRegister(12, 12);
+    processor.registers.intRegs.writeRegister(13, 13);
+
+    int numCycles = 4 + instructions.size();
+    for (auto cycle = 0; cycle < numCycles; cycle++) {
+      processor.executeOneCycle();
+      std::cout << processor << std::endl;
+    }
+
+    // x1 = x2 + x3 = 2 + 3 = 5
+    // x11 = x12 + x13 = 12 + 13 = 25
+    // x21 = x1 + x11 = 5 + 25 = 30
+    EXPECT_EQ(processor.registers.intRegs.readRegister(1), 5);
+    EXPECT_EQ(processor.registers.intRegs.readRegister(11), 25);
+    EXPECT_EQ(processor.registers.intRegs.readRegister(21), 30);
+  }
+
+  TEST(PipelinedProcessorTest, LoadAddSequence) {
+    PipelinedProcessor processor;
+
+    std::vector<std::string> instructions {
+      "lw x1, 0(x0)",
+      "lw x2, 4(x0)",
+      "add x0, x0, x0",
+      "add x0, x0, x0",
+      "add x3, x1, x2"
+    };
+    for (auto i = 0; i < instructions.size(); ++i) {
+      Word encoded = encodeInstruction(instructions[i]);
+      processor.instructionMemory.memory.writeBlock(i * 4, Block<1>{encoded});
+    }
+    processor.dataMemory.memory.writeBlock(0x0, Block<2>{1u, 2u});
+
+    int numCycles = 4 + instructions.size();
+    for (auto cycle = 0; cycle < numCycles; cycle++) {
+      processor.executeOneCycle();
+      std::cout << processor << std::endl;
+    }
+
+    // x1 = LOAD(0x0) = 1
+    // x2 = LOAD(0x4) = 2
+    // x3 = x1 + x2 = 1 + 2 = 3
+    EXPECT_EQ(processor.registers.intRegs.readRegister(1), 1);
+    EXPECT_EQ(processor.registers.intRegs.readRegister(2), 2);
+    EXPECT_EQ(processor.registers.intRegs.readRegister(3), 3);
+  }
+
+  TEST(PipelinedProcessorTest, StoreLoadSequence) {
+    PipelinedProcessor processor;
+
+    std::vector<std::string> instructions {
+      "addi x1, x0, 80",
+      "add x0, x0, x0",
+      "add x0, x0, x0",
+      "sw x1, 0(x0)",
+      "lw x2, 0(x0)"
+    };
+    for (auto i = 0; i < instructions.size(); ++i) {
+      Word encoded = encodeInstruction(instructions[i]);
+      processor.instructionMemory.memory.writeBlock(i * 4, Block<1>{encoded});
+    }
+
+    int numCycles = 4 + instructions.size();
+    for (auto cycle = 0; cycle < numCycles; cycle++) {
+      processor.executeOneCycle();
+      std::cout << processor << std::endl;
+    }
+
+    EXPECT_EQ(processor.registers.intRegs.readRegister(1), 80);
+    EXPECT_EQ(processor.registers.intRegs.readRegister(2), 80);
   }
 
 }

@@ -94,7 +94,7 @@ struct MainMemory {
 
   template<uint32_t W>
   Block<W> readBlock(uint32_t addr) {
-    std::cout << "reading 0x" << std::hex << addr << " from memory" << std::endl;
+    std::cout << "reading 0x" << std::hex << addr << std::dec << " from memory" << std::endl;
     if (!isAligned(addr, W)) {
       throw std::invalid_argument("address is not word-aligned");
     } else if (addr + nbytes(W) >= (1<< N)) {
@@ -107,7 +107,7 @@ struct MainMemory {
 
   template<uint32_t W>
   void writeBlock(uint32_t addr, Block<W> block) {
-    std::cout << "writing 0x" << std::hex << addr << " to memory" << std::endl;
+    std::cout << "writing 0x" << std::hex << addr << std::dec << " to memory" << std::endl;
     if (!isAligned(addr, W)) {
       throw std::invalid_argument("address is not word-aligned");
     } else if (addr + nbytes(W) >= (1<< N)) {
@@ -167,7 +167,7 @@ struct Cache {
 
   template<uint32_t _W>
   Block<_W> readBlock(uint32_t addr) {
-    std::cout << "reading 0x" << std::hex << addr << " from cache" << std::endl;
+    std::cout << "reading 0x" << std::hex << addr << std::dec << " from cache" << std::endl;
     static_assert(W % _W == 0, "requested block size must divide internal block size");
     if (!isAligned(addr, _W)) {
       throw std::invalid_argument("address is not word-aligned");
@@ -247,7 +247,7 @@ struct Cache {
 
   template<uint32_t _W>
   void writeBlock(uint32_t addr, Block<_W> block) {
-    std::cout << "writing 0x" << std::hex << addr << " to cache" << std::endl;
+    std::cout << "writing 0x" << std::hex << addr << std::dec << " to cache" << std::endl;
     static_assert(W % _W == 0, "requested block size must divide internal block size");
     if (!isAligned(addr, _W)) {
       throw std::invalid_argument("address is not word-aligned");
@@ -323,7 +323,7 @@ inline uint32_t randInt(uint32_t min, uint32_t max) {
 }
 
 inline std::ostream& operator<<(std::ostream& os, const Word& word) {
-  os << std::hex << uint32_t(word);
+  os << uint32_t(word);
   return os;
 }
 
@@ -357,7 +357,7 @@ std::ostream& operator<<(std::ostream& os, const Cache<W, S, B, N, WSch, Plc> &c
     const auto& entry = cache.entries[entryIdx];
     os << std::setw(8) << (entry.valid ? "valid" : "invalid") << " | ";
     os << std::setw(8) << (entry.dirty ? "yes" : "no") << " | ";
-    os << std::setw(8) << std::hex << entry.tag << " | ";
+    os << std::setw(8) << std::hex << entry.tag << std::dec << " | ";
     if constexpr (Plc == ReplacementPolicy::PreciseLRU) {
       os << std::setw(8) << std::dec << entry.lastAccessedTime << " | ";
     }

@@ -87,6 +87,22 @@ struct InSyncUnit : public Unit {
   void notifyInputChange() override { }
 };
 
+// buffered in-sync units perform a two-stage propagation:
+//  1. input changes are first propagated once to an internal buffer
+//  2. when the clock ticks, the output is updated according to the buffers
+// buffering allows us to execute in-sync units out-of-order irrespectively of data flow
+// since the inputs can be buffered even before the clock ticks
+//
+// rules:
+//  1. the Processor is responsible for calling bufferInputs() on all BufferedInSyncUnits
+//     before calling operate()
+//  2. when synchronizing the inputs and output signals of buffered units, use only
+//      i.  .out >> [foo] (.buffer >> [...] is internal)
+//      ii. [bar] >> .buffer ([...] >> out is internal)
+struct BufferedInSyncUnit : public InSyncUnit {
+  virtual void bufferInputs() = 0;
+};
+
 struct DecodeUnit : public OutOfSyncUnit {
   InputSignal instruction{this};
   OutputSignal readRegister1;
@@ -297,6 +313,16 @@ struct MEMWBRegisters : public InSyncUnit {
   void operate() override;
 };
 
+// life would be a lot easier if if can manipulate all InputSignal and OutputSignal
+// inside a class directly as a list
+struct BufferedMEMWBRegisters : public BufferedInSyncUnit {
+  MEMWBRegisters buffer, out;
+
+  BufferedMEMWBRegisters();
+  void bufferInputs() override;
+  void operate() override;
+};
+
 struct InstructionIssueUnit : public InSyncUnit {
   InputSignal pcIn{this};
   OutputSignal pcOut;
@@ -308,10 +334,14 @@ struct InstructionIssueUnit : public InSyncUnit {
 // the syncedUnits list
 struct Processor {
   std::vector<InSyncUnit*> syncedUnits;
+  std::vector<BufferedInSyncUnit*> bufferedUnits;
   int clockCycle = 0;
 
   virtual void executeOneCycle() {
     ++clockCycle;
+    for (BufferedInSyncUnit *unit : bufferedUnits) {
+      unit->bufferInputs();
+    }
     for (InSyncUnit *unit : syncedUnits) {
       unit->operate();
     }
@@ -340,15 +370,14 @@ struct PipelinedProcessor : public Processor {
   AndGate branchChooser;
   DataMemoryUnit dataMemory;
 
-  MEMWBRegisters MEM_WB;
+  BufferedMEMWBRegisters MEM_WB;
   Multiplexer writeBackSrcChooser;
 
   PipelinedProcessor();
-  void registerInSyncUnits();   // should only be called ONCE by constructor
+  // registers both in-sync units and buffered in-sync units
+  void registerUnits();   // should only be called ONCE by constructor
   void synchronizeSignals();    // should also be called ONCE by constructor
 };
-
-// ostream& operator<<(ostream& os, const Date& dt)
 
 // pretty-printing funcs for the signals and functional units
 std::ostream& operator<<(std::ostream& os, const InputSignal &input);
