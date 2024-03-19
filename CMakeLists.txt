@@ -8,6 +8,7 @@ add_executable(
   simulator
   src/main.cpp
   src/processor.cpp
+  src/assembler.cpp
 )
 target_include_directories(simulator
   PRIVATE ${PROJECT_SOURCE_DIR}/include
@@ -26,8 +27,10 @@ enable_testing()
 add_executable(
   simulator_test
   src/processor.cpp
+  src/assembler.cpp
   tests/memory_test.cpp
   tests/processor_test.cpp
+  tests/assembler_test.cpp
 )
 target_link_libraries(
   simulator_test
