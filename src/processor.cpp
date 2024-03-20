@@ -2,6 +2,7 @@
 #include "utils.hpp"
 #include <stdexcept>
 #include <ios>
+#include <utility>
 
 OutputSignal& OutputSignal::operator>>(InputSignal &signal) {
   syncedInputs.push_back(&signal);
@@ -146,6 +147,8 @@ void IDEXRegisters::operate() {
   ctrlRegWriteOut << ctrlRegWriteIn.val;
   writeRegisterOut << writeRegisterIn.val;
   pcOut << pcIn.val;
+  readRegister1Out << readRegister1In.val;
+  readRegister2Out << readRegister2In.val;
 }
 
 void EXMEMRegisters::operate() {
@@ -200,13 +203,53 @@ void InstructionIssueUnit::operate() {
   pcOut << pcIn.val;
 }
 
-PipelinedProcessor::PipelinedProcessor() {
+ForwardingUnit::ForwardingUnit(
+  IDEXRegisters &ID_EX,
+  EXMEMRegisters &EX_MEM,
+  BufferedMEMWBRegisters &MEM_WB
+) : MEM_WB{&MEM_WB}, EX_MEM{&EX_MEM}, ID_EX{&ID_EX} {}
+
+// the forwarding unit should also be called first among the in-sync units
+void ForwardingUnit::operate() {
+  // for each Rs1 and Rs2, stores a (register num, register data signal) pair
+  const std::pair<int, InputSignal&> sourceRegisters[2] {
+    { ID_EX->readRegister1In.val, ID_EX->readData1In },
+    { ID_EX->readRegister2In.val, ID_EX->readData2In }
+  };
+  // handles forwarding from both EX/MEM and MEM/WB
+  for (auto [registerNum, registerDataSignal] : sourceRegisters) {
+    if (
+      EX_MEM->ctrlRegWriteIn.val &&
+      EX_MEM->writeRegisterIn.val != 0 &&
+      EX_MEM->writeRegisterIn.val == registerNum
+    ) {
+      registerDataSignal.val = EX_MEM->aluOutputIn.val;
+    } else if (
+      MEM_WB->buffer.ctrlRegWriteIn.val &&
+      MEM_WB->buffer.writeRegisterIn.val != 0 &&
+      MEM_WB->buffer.writeRegisterIn.val == ID_EX->readRegister1In.val
+    ) {
+      Word val = MEM_WB->buffer.ctrlMemToRegIn.val ?
+        MEM_WB->buffer.readMemoryDataIn.val : MEM_WB->buffer.aluOutputIn.val;
+      registerDataSignal.val = val;
+    }
+  }
+}
+
+PipelinedProcessor::PipelinedProcessor(bool useForwarding)
+  : forwardingUnit(ID_EX, EX_MEM, MEM_WB)
+{
   synchronizeSignals();
-  registerUnits();
+  registerUnits(useForwarding);
 }
 
 // the order determines the order in which these in-sync units are called
-void PipelinedProcessor::registerUnits() {
+void PipelinedProcessor::registerUnits(bool useForwarding) {
+  // forwarding unit must be called before any other in-sync unit
+  if (useForwarding) {
+    syncedUnits.push_back(&forwardingUnit);
+  }
+
   syncedUnits.push_back(&EX_MEM);
   syncedUnits.push_back(&ID_EX);
   syncedUnits.push_back(&IF_ID);
@@ -261,6 +304,8 @@ void PipelinedProcessor::synchronizeSignals() {
   immGen.immediate >> ID_EX.immediateIn;
   IF_ID.instructionOut >> ID_EX.instructionIn;
   decoder.writeRegister >> ID_EX.writeRegisterIn;
+  decoder.readRegister1 >> ID_EX.readRegister1In;
+  decoder.readRegister2 >> ID_EX.readRegister2In;
 
   // execute stage
   ID_EX.pcOut >> branchAdder.input0;

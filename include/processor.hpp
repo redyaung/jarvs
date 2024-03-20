@@ -253,6 +253,8 @@ struct IDEXRegisters : public InSyncUnit {
   InputSignal ctrlRegWriteIn{this};
   InputSignal writeRegisterIn{this};
   InputSignal pcIn{this};
+  InputSignal readRegister1In{this};
+  InputSignal readRegister2In{this};
 
   OutputSignal ctrlAluSrcOut;
   OutputSignal ctrlAluOpOut;
@@ -263,6 +265,8 @@ struct IDEXRegisters : public InSyncUnit {
   OutputSignal ctrlRegWriteOut;
   OutputSignal writeRegisterOut;
   OutputSignal pcOut;
+  OutputSignal readRegister1Out;
+  OutputSignal readRegister2Out;
 
   void operate() override;
 };
@@ -330,6 +334,21 @@ struct InstructionIssueUnit : public InSyncUnit {
   void operate() override;
 };
 
+struct ForwardingUnit : public InSyncUnit {
+  // quite ugly; would be great if this can be manipulated like MEMWBRegisters
+  IDEXRegisters *ID_EX;
+  EXMEMRegisters *EX_MEM;
+  BufferedMEMWBRegisters *MEM_WB;
+
+  ForwardingUnit(
+    IDEXRegisters &ID_EX,
+    EXMEMRegisters &EX_MEM,
+    BufferedMEMWBRegisters &MEM_WB
+  );
+
+  void operate() override;
+};
+
 // the processor is responsible for registering the InSyncUnits that it uses into
 // the syncedUnits list
 struct Processor {
@@ -373,9 +392,11 @@ struct PipelinedProcessor : public Processor {
   BufferedMEMWBRegisters MEM_WB;
   Multiplexer writeBackSrcChooser;
 
-  PipelinedProcessor();
+  ForwardingUnit forwardingUnit;
+
+  PipelinedProcessor(bool useForwarding = false);
   // registers both in-sync units and buffered in-sync units
-  void registerUnits();   // should only be called ONCE by constructor
+  void registerUnits(bool useForwarding);   // should only be called ONCE by constructor
   void synchronizeSignals();    // should also be called ONCE by constructor
 };
 
