@@ -13,3 +13,15 @@ directly instead of using `ctest`. (`ctest` doesn't support this sadly).
     - a caveat is to *prepend the asterisks `*` with a backslash* to avoid funky zsh problems.
     - for example, if you want to run only pipelined processor tests, you would run
     `./build/simulator_test --gtest_filter=Pipelined\*`
+
+## development notes
+
+### adding new instructions to assembler
+- go to `src/assembler.cpp`
+- add the instruction to the `fixedFieldsLookup` map -- you will need the `opcode`, `func3`
+and `func7` fields (if applicable).
+- add the name of the instruction (e.g. `add`) to the appropriate `vector` containing the
+instruction names -- one of `Rs`, `Is`, `Ss`, `SBs`, `Us`, `UJs`.
+
+*note: adding new instructions to the processor doesn't end at the assembler. you will also*
+*need to configure the processor to handle the instruction.*
