@@ -45,4 +45,10 @@ namespace {
     uint32_t sw = 0b0000000'00001'00010'010'00100'0100011;
     EXPECT_EQ(instruction, sw);
   }
+
+  TEST(EncodeInstructionSet, Beq) {
+    Word instruction = encodeInstruction("beq x1, x2, 4");
+    uint32_t beq = 0b0000000'00010'00001'000'00100'1100011;
+    EXPECT_EQ(instruction, beq);
+  }
 }

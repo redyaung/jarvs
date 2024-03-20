@@ -5,6 +5,8 @@
 #include <stdexcept>
 #include <unordered_map>
 #include <string>
+#include <tuple>
+#include <optional>
 
 namespace _Assembler {
   // treat S = SB and U = UJ for now
@@ -38,163 +40,219 @@ namespace _Assembler {
   };
   using ParsedInstruction = std::variant<R, I, S, U>;
 
-  std::regex RFormatRegex(
+  std::regex RFmtRegex(
     "^\\s*([a-z]+) x(\\d{1,2}), x(\\d{1,2}), x(\\d{1,2})"
   );
-  std::regex IAndSFormatRegex(
+  std::regex IFmtRegex(
     "^\\s*([a-z]+) x(\\d{1,2}), x(\\d{1,2}), (\\d+)"
   );
-  std::regex LoadStoreRegex(
-    "^\\s*([a-z]+) x(\\d{1,2}), (\\d+)\\(x(\\d{1,2})\\)"
-  );
-  std::regex UFormatRegex(
+  std::regex UFmtRegex(
     "^\\s*([a-z]+) x(\\d{1,2}), (\\d+)"
   );
+  std::regex I_FmtRegex(
+    "^\\s*([a-z]+) x(\\d{1,2}), (\\d+)\\(x(\\d{1,2})\\)"
+  );
 
-  struct PossibleBitFields {
+  enum class ParseFmt : char {
+    R = 0, I, S, SB, U, UJ, I_, S_      // _ : bracketed format (lw)
+  };
+  constexpr size_t parseFmtCount = 8;   // note: must explicitly set this
+
+  std::unordered_map<ParseFmt, std::regex> regexLookup {
+    { ParseFmt::R,  RFmtRegex },
+    { ParseFmt::I,  IFmtRegex },
+    { ParseFmt::S,  IFmtRegex },
+    { ParseFmt::SB, IFmtRegex },
+    { ParseFmt::U,  UFmtRegex },
+    { ParseFmt::UJ, UFmtRegex },
+    { ParseFmt::I_, I_FmtRegex },
+    { ParseFmt::S_, I_FmtRegex },
+  };
+
+  struct FixedBitFields {
     uint32_t opcode;
-    uint32_t func3;
-    uint32_t func7;
+    std::optional<uint32_t> func3;
+    std::optional<uint32_t> func7;
   };
-  std::unordered_map<std::string, PossibleBitFields> RFieldsLookup {
+
+  // note: new instructions *must* be registered here
+  std::unordered_map<std::string, FixedBitFields> fixedFieldsLookup {
+    // R
     {"add",   {0b0110011, 0x0, 0x00}},
-    {"sub",   {0b0110011, 0x0, 0x20}}
+    {"sub",   {0b0110011, 0x0, 0x20}},
+
+    // I
+    {"addi",  {0b0010011, 0x0, std::nullopt}},
+    {"lw",    {0b0000011, 0x2, std::nullopt}},
+
+    // S
+    {"sw",    {0b0100011, 0x2, std::nullopt}},
+
+    // SB
+    {"beq",   {0b1100011, 0x0, std::nullopt}},
+
+    // U
+
+    // UJ
   };
-  std::unordered_map<std::string, PossibleBitFields> IFieldsLookup {
-    {"addi",  {0b0010011, 0x0, 0xDEAD}},
-    {"lw",    {0b0000011, 0x2, 0xDEAD}}
+
+  // note: new instructions *must* be registered here
+  std::vector<std::string> Rs {
+    "add", "sub"
   };
-  std::unordered_map<std::string, PossibleBitFields> SFieldsLookup {
-    {"sw",    {0b0100011, 0x2, 0xDEAD}}
+  std::vector<std::string> Is {
+    "addi", "lw"
   };
-  std::unordered_map<std::string, PossibleBitFields> UFieldsLookup {
+  std::vector<std::string> Ss {
+    "sw"
+  };
+  std::vector<std::string> SBs {
+    "beq"
+  };
+  std::vector<std::string> Us {
+
+  };
+  std::vector<std::string> UJs {
 
   };
 
-  void checkRegisterNumber(uint32_t regNum, const std::string &regType) {
-    if (regNum < 0 || regNum >= 32) {
-      throw std::invalid_argument(
-        "invalid " + regType + " register num: " + std::to_string(regNum)
-      );
+  // contains a list of valid instructions for each format so that premature matches to
+  // a different format are rejected
+  std::unordered_map<ParseFmt, std::vector<std::string>> validInstructions {
+    {ParseFmt::R,  Rs},
+    {ParseFmt::I,  Is},
+    {ParseFmt::S,  Ss},
+    {ParseFmt::SB, SBs},
+    {ParseFmt::U,  Us},
+    {ParseFmt::UJ, UJs},
+    {ParseFmt::I_, Is},
+    {ParseFmt::S_, Ss},
+  };
+
+  struct RegexMatchIndex {
+    size_t name;
+    std::optional<size_t> rs1;
+    std::optional<size_t> rs2;
+    std::optional<size_t> rd;
+    std::optional<size_t> imm;
+  };
+  std::unordered_map<ParseFmt, RegexMatchIndex> indexLookup {
+    {ParseFmt::R,   { .name=1, .rs1=3, .rs2=4, .rd=2, .imm=std::nullopt }},
+    {ParseFmt::I,   { .name=1, .rs1=3, .rs2=std::nullopt, .rd=2, .imm=4 }},
+    {ParseFmt::S,   { .name=1, .rs1=3, .rs2=2, .rd=std::nullopt, .imm=4 }},
+    {ParseFmt::SB,  { .name=1, .rs1=2, .rs2=3, .rd=std::nullopt, .imm=4 }},
+    {ParseFmt::U,   { .name=1, .rs1=std::nullopt, .rs2=std::nullopt, .rd=2, .imm=3 }},
+    {ParseFmt::UJ,  { .name=1, .rs1=std::nullopt, .rs2=std::nullopt, .rd=2, .imm=3 }},
+    {ParseFmt::I_,  { .name=1, .rs1=4, .rs2=std::nullopt, .rd=2, .imm=3 }},
+    {ParseFmt::S_,  { .name=1, .rs1=4, .rs2=2, .rd=std::nullopt, .imm=3 }},
+  };
+
+  struct VariableBitFields {
+    std::optional<uint8_t> rs1;
+    std::optional<uint8_t> rs2;
+    std::optional<uint8_t> rd;
+    std::optional<uint32_t> imm;
+  };
+
+  inline void checkRegisterInBounds(uint32_t reg) {
+    if (reg > 31) {
+      throw std::invalid_argument("invalid register: " + std::to_string(reg));
     }
   }
 
-  R makeRFormatInstruction(
-    const std::string &name, uint32_t rd, uint32_t rs1, uint32_t rs2
+  ParsedInstruction makeInstruction(
+    const std::string &name,
+    const FixedBitFields &fFields,
+    const VariableBitFields &vFields
   ) {
-    checkRegisterNumber(rd, "rd");
-    checkRegisterNumber(rs1, "rs1");
-    checkRegisterNumber(rs2, "rs2");
-    if (auto result = RFieldsLookup.find(name); result != RFieldsLookup.end()) {
-      PossibleBitFields fields = result->second;
-      return R{
-        fields.opcode,
-        rd,
-        fields.func3,
-        rs1,
-        rs2,
-        fields.func7
+    // can handle two types together (like S and SB) as long as the set of valid fields is same
+    if (contains(Rs, name)) {
+      checkRegisterInBounds(vFields.rs1.value());
+      checkRegisterInBounds(vFields.rs2.value());
+      checkRegisterInBounds(vFields.rd.value());
+      return R {
+        .opcode = fFields.opcode,
+        .rd = vFields.rd.value(),
+        .func3 = fFields.func3.value(),
+        .rs1 = vFields.rs1.value(),
+        .rs2 = vFields.rs2.value(),
+        .func7 = fFields.func7.value()
+      };
+    } else if (contains(Is, name)) {
+      checkRegisterInBounds(vFields.rs1.value());
+      checkRegisterInBounds(vFields.rd.value());
+      return I {
+        .opcode = fFields.opcode,
+        .rd = vFields.rd.value(),
+        .func3 = fFields.func3.value(),
+        .rs1 = vFields.rs1.value(),
+        .imm = vFields.imm.value()
+      };
+    } else if (contains(Ss, name) || contains(SBs, name)) {
+      checkRegisterInBounds(vFields.rs1.value());
+      checkRegisterInBounds(vFields.rs2.value());
+      uint32_t lowerImm = extractBits(vFields.imm.value(), 0, 4);
+      uint32_t upperImm = extractBits(vFields.imm.value(), 5, 11);
+      return S {
+        .opcode = fFields.opcode,
+        .lowerImm = lowerImm,
+        .func3 = fFields.func3.value(),
+        .rs1 = vFields.rs1.value(),
+        .rs2 = vFields.rs2.value(),
+        .upperImm = upperImm
+      };
+    } else if (contains(Us, name) || contains(UJs, name)) {
+      checkRegisterInBounds(vFields.rd.value());
+      return U {
+        .opcode = fFields.opcode,
+        .rd = vFields.rd.value(),
+        .imm = vFields.imm.value()
       };
     } else {
-      throw std::invalid_argument("unsupported R-type instruction: " + name);
+      throw std::invalid_argument("cannot find instruction: " + name);
     }
   }
 
-  I makeIFormatInstruction(
-    const std::string &name, uint32_t rd, uint32_t rs1, uint32_t imm
+  VariableBitFields makeFieldsFromIndices(
+    const std::smatch &matchResults,
+    const RegexMatchIndex &indices
   ) {
-    checkRegisterNumber(rd, "rd");
-    checkRegisterNumber(rs1, "rs1");
-    if (auto result = IFieldsLookup.find(name); result != IFieldsLookup.end()) {
-      PossibleBitFields fields = result->second;
-      return I{
-        fields.opcode,
-        rd,
-        fields.func3,
-        rs1,
-        imm
-      };
-    } else {
-      throw std::invalid_argument("unsupported I-type instruction: " + name);
-    }
-  }
-
-  S makeSFormatInstruction(
-    const std::string &name, uint32_t rs1, uint32_t rs2, uint32_t lowerImm, uint32_t upperImm
-  ) {
-    checkRegisterNumber(rs1, "rs1");
-    checkRegisterNumber(rs2, "rs2");
-    if (auto result = SFieldsLookup.find(name); result != SFieldsLookup.end()) {
-      PossibleBitFields fields = result->second;
-      return S{
-        fields.opcode,
-        lowerImm,
-        fields.func3,
-        rs1,
-        rs2,
-        upperImm
-      };
-    } else {
-      throw std::invalid_argument("unsupported S-type instruction: " + name);
-    }
-  }
-
-  U makeUFormatInstruction(
-    const std::string &name, uint32_t rd, uint32_t imm
-  ) {
-    checkRegisterNumber(rd, "rd");
-    if (auto result = UFieldsLookup.find(name); result != UFieldsLookup.end()) {
-      PossibleBitFields fields = result->second;
-      return U{
-        fields.opcode,
-        rd,
-        imm
-      };
-    } else {
-      throw std::invalid_argument("unsupported U-type instruction: " + name);
-    }
+    return VariableBitFields {
+      .rs1 = indices.rs1 ?
+        std::optional(std::stoi(matchResults[*indices.rs1])) : std::nullopt,
+      .rs2 = indices.rs2 ? 
+        std::optional(std::stoi(matchResults[*indices.rs2])) : std::nullopt,
+      .rd = indices.rd ? 
+        std::optional(std::stoi(matchResults[*indices.rd])) : std::nullopt,
+      .imm = indices.imm ? 
+        std::optional(std::stoi(matchResults[*indices.imm])) : std::nullopt
+    };
   }
 
   ParsedInstruction parseInstruction(const std::string &line) {
-    std::smatch matches;
-    if (std::regex_match(line, matches, RFormatRegex)) {
-      std::string name{matches[1]};
-      uint32_t rd = std::stoul(matches[2].str());
-      uint32_t rs1 = std::stoul(matches[3].str());
-      uint32_t rs2 = std::stoul(matches[4].str());
-      return makeRFormatInstruction(name, rd, rs1, rs2);
-    } else if (std::regex_match(line, matches, IAndSFormatRegex)) {
-      std::string name{matches[1]};
-      uint32_t r0 = std::stoul(matches[2].str());
-      uint32_t r1 = std::stoul(matches[3].str());
-      uint32_t imm = std::stoul(matches[4].str());
-      if (IFieldsLookup.contains(name)) {   // I-format
-        return makeIFormatInstruction(name, r0, r1, imm);
-      } else {    // S-format
-        uint32_t lowerImm = extractBits(imm, 0, 4);
-        uint32_t upperImm = extractBits(imm, 5, 11);
-        return makeSFormatInstruction(name, r1, r0, lowerImm, upperImm);
+    for (   // iterate over ParseFmts
+      ParseFmt fmt = ParseFmt::R;
+      char(fmt) < parseFmtCount;
+      fmt = static_cast<ParseFmt>(char(fmt) + 1)
+    ) {
+      std::regex pattern(regexLookup[fmt]);
+      std::smatch matchResults;
+      // skip if the formats don't even match
+      if (!std::regex_match(line, matchResults, pattern)) {
+        continue;
       }
-    } else if (std::regex_match(line, matches, LoadStoreRegex)) {
-      std::string name{matches[1]};
-      uint32_t r0 = std::stoul(matches[2].str());
-      uint32_t imm = std::stoul(matches[3].str());
-      uint32_t r1 = std::stoul(matches[4].str());
-      if (IFieldsLookup.contains(name)) {   // I-format
-        return makeIFormatInstruction(name, r0, r1, imm);
-      } else {    // S-format
-        uint32_t lowerImm = extractBits(imm, 0, 4);
-        uint32_t upperImm = extractBits(imm, 5, 11);
-        return makeSFormatInstruction(name, r1, r0, lowerImm, upperImm);
+      // relies on the fact that instruction capture pos is always 1 in regex-s
+      std::string instructionName = matchResults[1];
+      // skip if the instruction doesn't have the current format
+      if (!contains(validInstructions[fmt], instructionName)) {
+        continue;
       }
-    } else if (std::regex_match(line, matches, UFormatRegex)) {
-      std::string name{matches[1]};
-      uint32_t rd = std::stoul(matches[2].str());
-      uint32_t imm = std::stoul(matches[3].str());
-      return makeUFormatInstruction(name, rd, imm);
-    } else {
-      throw std::invalid_argument("unable to parse: " + line);
+      FixedBitFields fFields = fixedFieldsLookup[instructionName];
+      const RegexMatchIndex &indices = indexLookup[fmt];
+      VariableBitFields vFields = makeFieldsFromIndices(matchResults, indices);
+      return makeInstruction(instructionName, fFields, vFields);
     }
+    throw std::invalid_argument("cannot parse instruction: " + line);
   }
 
   Word encodeInstruction(ParsedInstruction parsed) {
