@@ -356,13 +356,18 @@ struct DataHazardDetectionUnit : public InSyncUnit {
   InstructionIssueUnit *issueUnit;
   IFIDRegisters *IF_ID;
   IDEXRegisters *ID_EX;
+  EXMEMRegisters *EX_MEM;
+  bool isForwarding;
 
   DataHazardDetectionUnit(
+    bool isForwarding,
     InstructionIssueUnit &issueUnit,
     IFIDRegisters &IF_ID,
-    IDEXRegisters &ID_EX
+    IDEXRegisters &ID_EX,
+    EXMEMRegisters &EX_MEM
   );
   void operate() override;
+  bool shouldStall(uint32_t rs1, uint32_t rs2);
 };
 
 // the processor is responsible for registering the InSyncUnits that it uses into

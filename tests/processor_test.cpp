@@ -571,5 +571,58 @@ namespace {
     EXPECT_EQ(processor.registers.intRegs.readRegister(2), 48);
   }
 
+  TEST(PipelinedProcessorTest, HazardDetectionNoFwdLoadAdd) {
+    PipelinedProcessor processor;
+
+    std::vector<std::string> instructions {
+      "lw x1, 0(x0)",
+      "lw x2, 4(x0)",
+      "add x3, x1, x2"
+    };
+    for (auto i = 0; i < instructions.size(); ++i) {
+      Word encoded = encodeInstruction(instructions[i]);
+      processor.instructionMemory.memory.writeBlock(i * 4, Block<1>{encoded});
+    }
+    processor.dataMemory.memory.writeBlock(0x0, Block<2>{1u, 2u});
+
+    int numStalls = 2;
+    int numCycles = 4 + instructions.size() + numStalls;
+    for (auto cycle = 0; cycle < numCycles; cycle++) {
+      processor.executeOneCycle();
+      std::cout << processor << std::endl;
+    }
+
+    // x1 = LOAD(0x0) = 1
+    // x2 = LOAD(0x4) = 2
+    // x3 = x1 + x2 = 1 + 2 = 3
+    EXPECT_EQ(processor.registers.intRegs.readRegister(1), 1);
+    EXPECT_EQ(processor.registers.intRegs.readRegister(2), 2);
+    EXPECT_EQ(processor.registers.intRegs.readRegister(3), 3);
+  }
+
+  TEST(PipelinedProcessorTest, HazardDetectionNoFwdAdds) {
+    PipelinedProcessor processor;
+
+    std::vector<std::string> instructions {
+      "addi x1, x0, 1",
+      "add x2, x1, x1"
+    };
+    for (auto i = 0; i < instructions.size(); ++i) {
+      Word encoded = encodeInstruction(instructions[i]);
+      processor.instructionMemory.memory.writeBlock(i * 4, Block<1>{encoded});
+    }
+
+    int numStalls = 2;
+    int numCycles = 4 + instructions.size() + numStalls;
+    for (auto cycle = 0; cycle < numCycles; cycle++) {
+      processor.executeOneCycle();
+      std::cout << processor << std::endl;
+    }
+
+    // x1 = LOAD(0x0) = 1
+    // x2 = LOAD(0x4) = 2
+    EXPECT_EQ(processor.registers.intRegs.readRegister(1), 1);
+    EXPECT_EQ(processor.registers.intRegs.readRegister(2), 2);
+  }
 }
 

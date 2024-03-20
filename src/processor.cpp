@@ -237,16 +237,19 @@ void ForwardingUnit::operate() {
 }
 
 DataHazardDetectionUnit::DataHazardDetectionUnit(
-  InstructionIssueUnit &issueUnit, IFIDRegisters &IF_ID, IDEXRegisters &ID_EX
-) : issueUnit{&issueUnit}, IF_ID{&IF_ID}, ID_EX{&ID_EX} {}
+  bool isForwarding,
+  InstructionIssueUnit &issueUnit,
+  IFIDRegisters &IF_ID,
+  IDEXRegisters &ID_EX,
+  EXMEMRegisters &EX_MEM
+) :
+  isForwarding{isForwarding}, issueUnit{&issueUnit}, IF_ID{&IF_ID}, ID_EX{&ID_EX},
+  EX_MEM{&EX_MEM} {}
 
 void DataHazardDetectionUnit::operate() {
   uint32_t rs1 = extractBits(IF_ID->instructionIn.val, 15, 19);
   uint32_t rs2 = extractBits(IF_ID->instructionIn.val, 20, 24);
-  if (
-    ID_EX->ctrlMemReadIn.val &&
-    (rs1 == ID_EX->writeRegisterIn.val || rs2 == ID_EX->writeRegisterIn.val)
-  ) {
+  if (shouldStall(rs1, rs2)) {
     // stall the pipeline by one cycle by
     //  1. deasserting MemWrite, RegWrite and Branch signals of instruction in IF
     //      - we effectively achieve this by zeroing out the instruction itself
@@ -258,9 +261,30 @@ void DataHazardDetectionUnit::operate() {
   }
 }
 
+bool DataHazardDetectionUnit::shouldStall(uint32_t rs1, uint32_t rs2) {
+  // forwarding: only check for load-use data hazard
+  if (isForwarding) {
+    return (
+      ID_EX->ctrlMemReadIn.val &&
+      (rs1 == ID_EX->writeRegisterIn.val || rs2 == ID_EX->writeRegisterIn.val)
+    );
+  }
+  // no forwarding: check for all data hazards
+  return (
+    (
+      ID_EX->ctrlRegWriteIn.val && ID_EX->writeRegisterIn.val != 0 &&
+      (rs1 == ID_EX->writeRegisterIn.val || rs2 == ID_EX->writeRegisterIn.val)
+    ) ||
+    (
+      EX_MEM->ctrlRegWriteIn.val && EX_MEM->writeRegisterIn.val != 0 &&
+      (rs1 == EX_MEM->writeRegisterIn.val || rs2 == EX_MEM->writeRegisterIn.val)
+    )
+  );
+}
+
 PipelinedProcessor::PipelinedProcessor(bool useForwarding)
   : forwardingUnit(ID_EX, EX_MEM, MEM_WB),
-    hazardDetectionUnit(issueUnit, IF_ID, ID_EX)
+    hazardDetectionUnit(useForwarding, issueUnit, IF_ID, ID_EX, EX_MEM)
 {
   synchronizeSignals();
   registerUnits(useForwarding);
@@ -268,9 +292,9 @@ PipelinedProcessor::PipelinedProcessor(bool useForwarding)
 
 // the order determines the order in which these in-sync units are called
 void PipelinedProcessor::registerUnits(bool useForwarding) {
-  // forwarding unit must be called before any other in-sync unit
+  // hazard detection and forwarding unit are called before any other in-sync units
+  syncedUnits.push_back(&hazardDetectionUnit);
   if (useForwarding) {
-    syncedUnits.push_back(&hazardDetectionUnit);
     syncedUnits.push_back(&forwardingUnit);
   }
 
