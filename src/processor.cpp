@@ -200,7 +200,7 @@ void BufferedMEMWBRegisters::operate() {
 }
 
 void InstructionIssueUnit::operate() {
-  pcOut << pcIn.val;
+  pcOut << (shouldStall ? pcOut.val : pcIn.val);
 }
 
 ForwardingUnit::ForwardingUnit(
@@ -236,8 +236,31 @@ void ForwardingUnit::operate() {
   }
 }
 
+DataHazardDetectionUnit::DataHazardDetectionUnit(
+  InstructionIssueUnit &issueUnit, IFIDRegisters &IF_ID, IDEXRegisters &ID_EX
+) : issueUnit{&issueUnit}, IF_ID{&IF_ID}, ID_EX{&ID_EX} {}
+
+void DataHazardDetectionUnit::operate() {
+  uint32_t rs1 = extractBits(IF_ID->instructionIn.val, 15, 19);
+  uint32_t rs2 = extractBits(IF_ID->instructionIn.val, 20, 24);
+  if (
+    ID_EX->ctrlMemReadIn.val &&
+    (rs1 == ID_EX->writeRegisterIn.val || rs2 == ID_EX->writeRegisterIn.val)
+  ) {
+    // stall the pipeline by one cycle by
+    //  1. deasserting MemWrite, RegWrite and Branch signals of instruction in IF
+    //      - we effectively achieve this by zeroing out the instruction itself
+    //  2. setting the PC to be equal to the latest instruction (in IF)
+    IF_ID->instructionIn.val = 0x0;
+    issueUnit->shouldStall = true;
+  } else {
+    issueUnit->shouldStall = false;
+  }
+}
+
 PipelinedProcessor::PipelinedProcessor(bool useForwarding)
-  : forwardingUnit(ID_EX, EX_MEM, MEM_WB)
+  : forwardingUnit(ID_EX, EX_MEM, MEM_WB),
+    hazardDetectionUnit(issueUnit, IF_ID, ID_EX)
 {
   synchronizeSignals();
   registerUnits(useForwarding);
@@ -247,6 +270,7 @@ PipelinedProcessor::PipelinedProcessor(bool useForwarding)
 void PipelinedProcessor::registerUnits(bool useForwarding) {
   // forwarding unit must be called before any other in-sync unit
   if (useForwarding) {
+    syncedUnits.push_back(&hazardDetectionUnit);
     syncedUnits.push_back(&forwardingUnit);
   }
 
@@ -527,6 +551,7 @@ std::ostream& operator<<(std::ostream& os, const BufferedMEMWBRegisters &MEM_WB)
 std::ostream& operator<<(std::ostream& os, const InstructionIssueUnit &issueUnit) {
   os << "in InstructionIssueUnit: " << std::endl;
   os << "\t" << "pcOut: " << issueUnit.pcOut;
+  os << "\t" << "shouldStall: " << std::boolalpha << issueUnit.shouldStall;
   return os;
 }
 

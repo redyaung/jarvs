@@ -331,6 +331,9 @@ struct InstructionIssueUnit : public InSyncUnit {
   InputSignal pcIn{this};
   OutputSignal pcOut;
 
+  // used by the data hazard detection unit to signal a stall
+  bool shouldStall = false;
+
   void operate() override;
 };
 
@@ -345,7 +348,20 @@ struct ForwardingUnit : public InSyncUnit {
     EXMEMRegisters &EX_MEM,
     BufferedMEMWBRegisters &MEM_WB
   );
+  void operate() override;
+};
 
+// must be called before the forwarding unit
+struct DataHazardDetectionUnit : public InSyncUnit {
+  InstructionIssueUnit *issueUnit;
+  IFIDRegisters *IF_ID;
+  IDEXRegisters *ID_EX;
+
+  DataHazardDetectionUnit(
+    InstructionIssueUnit &issueUnit,
+    IFIDRegisters &IF_ID,
+    IDEXRegisters &ID_EX
+  );
   void operate() override;
 };
 
@@ -393,6 +409,7 @@ struct PipelinedProcessor : public Processor {
   Multiplexer writeBackSrcChooser;
 
   ForwardingUnit forwardingUnit;
+  DataHazardDetectionUnit hazardDetectionUnit;
 
   PipelinedProcessor(bool useForwarding = false);
   // registers both in-sync units and buffered in-sync units
