@@ -9,6 +9,7 @@
 #include <type_traits>
 #include <vector>
 #include <ostream>
+#include <concepts>
 
 constexpr int registerCount = 32;
 
@@ -16,7 +17,6 @@ enum class RegisterType {
   Integer, FloatingPoint
 };
 
-// todo: use the updated Word
 template<RegisterType T>
 struct RegisterFile {
   using Value = std::conditional_t<T == RegisterType::Integer, uint32_t, float>;
@@ -137,7 +137,7 @@ struct RegisterFileUnit : public OutOfSyncUnit {
   OutputSignal readData1;
   OutputSignal readData2;
 
-  // todo: perhaps we should make the RegisterFile fail silently as invalid
+  // suggestion: perhaps we should make the RegisterFile fail silently as invalid
   // inputs are not only possible but valid
   RegisterFile<RegisterType::Integer> intRegs;
 
@@ -245,7 +245,7 @@ struct IFIDRegisters : public InSyncUnit {
   void operate() override;
 };
 
-// error-prone list of control signals (todo: is there a better way?)
+// error-prone list of control signals (suggestion: is there a better way?)
 struct IDEXRegisters : public InSyncUnit {
   InputSignal readData1In{this};
   InputSignal readData2In{this};
@@ -322,16 +322,6 @@ struct MEMWBRegisters : public InSyncUnit {
   void operate() override;
 };
 
-// life would be a lot easier if if can manipulate all InputSignal and OutputSignal
-// inside a class directly as a list
-struct BufferedMEMWBRegisters : public BufferedInSyncUnit {
-  MEMWBRegisters buffer, out;
-
-  BufferedMEMWBRegisters();
-  void bufferInputs() override;
-  void operate() override;
-};
-
 struct InstructionIssueUnit : public InSyncUnit {
   InputSignal pcIn{this};
   OutputSignal pcOut;
@@ -342,13 +332,23 @@ struct InstructionIssueUnit : public InSyncUnit {
   void operate() override;
 };
 
-// todo: make buffered units templated -- we can!
-struct BufferedInstructionIssueUnit : public BufferedInSyncUnit {
-  InstructionIssueUnit buffer, out;
+// subclass ConcreteBufferedUnit to define *concrete* (lol) buffer units
+//  - the parent class cannot synchronize the signals between the buffer and output
+//    units, so this must be done in the c-tor of the subclass
+template<std::derived_from<InSyncUnit> U>
+struct ConcreteBufferedUnit : BufferedInSyncUnit {
+  U buffer, out;
 
+  void bufferInputs() override { buffer.operate(); }
+  void operate() override { out.operate(); }
+};
+
+struct BufferedMEMWBRegisters : public ConcreteBufferedUnit<MEMWBRegisters> {
+  BufferedMEMWBRegisters();
+};
+
+struct BufferedInstructionIssueUnit : public ConcreteBufferedUnit<InstructionIssueUnit> {
   BufferedInstructionIssueUnit();
-  void bufferInputs() override;
-  void operate() override;
 };
 
 struct ForwardingUnit : public InSyncUnit {
@@ -438,7 +438,6 @@ struct PipelinedProcessor : public Processor {
   void synchronizeSignals();    // should also be called ONCE by constructor
 };
 
-// todo: add missing declarations for newly added instructions
 // pretty-printing funcs for the signals and functional units
 std::ostream& operator<<(std::ostream& os, const InputSignal &input);
 std::ostream& operator<<(std::ostream& os, const OutputSignal &output);
@@ -449,6 +448,7 @@ std::ostream& operator<<(std::ostream& os, const RegisterFileUnit &registers);
 std::ostream& operator<<(std::ostream& os, const ImmediateGenerator &immGen);
 std::ostream& operator<<(std::ostream& os, const Multiplexer &mux);
 std::ostream& operator<<(std::ostream& os, const ALUControl &aluControl);
+std::ostream& operator<<(std::ostream& os, const BranchALUControl &branchAluControl);
 std::ostream& operator<<(std::ostream& os, const ALUUnit &alu);
 std::ostream& operator<<(std::ostream& os, const DataMemoryUnit &dataMemory);
 std::ostream& operator<<(std::ostream& os, const InstructionMemoryUnit &instructionMemory);
@@ -458,6 +458,8 @@ std::ostream& operator<<(std::ostream& os, const IDEXRegisters &ID_EX);
 std::ostream& operator<<(std::ostream& os, const EXMEMRegisters &EX_MEM);
 std::ostream& operator<<(std::ostream& os, const MEMWBRegisters &MEM_WB);
 std::ostream& operator<<(std::ostream& os, const InstructionIssueUnit &issueUnit);
+std::ostream& operator<<(std::ostream& os, const BufferedMEMWBRegisters &MEM_WB);
+std::ostream& operator<<(std::ostream& os, const BufferedInstructionIssueUnit &issueUnit);
 
 std::ostream& operator<<(std::ostream& os, const PipelinedProcessor &processor);
 

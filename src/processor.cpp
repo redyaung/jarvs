@@ -183,7 +183,11 @@ void MEMWBRegisters::operate() {
   ctrlRegWriteOut << ctrlRegWriteIn.val;
 }
 
-// synchronize the internal signals connecting buffer and out
+void InstructionIssueUnit::operate() {
+  pcOut << (shouldStall ? pcOut.val : pcIn.val);
+}
+
+// synchronize signals in the c-tor
 BufferedMEMWBRegisters::BufferedMEMWBRegisters() {
   buffer.readMemoryDataOut >> out.readMemoryDataIn;
   buffer.aluOutputOut >> out.aluOutputIn;
@@ -193,30 +197,8 @@ BufferedMEMWBRegisters::BufferedMEMWBRegisters() {
   buffer.ctrlRegWriteOut >> out.ctrlRegWriteIn;
 }
 
-// propagate changes from buffer to out
-void BufferedMEMWBRegisters::bufferInputs() {
-  buffer.operate();
-}
-
-// propagate changes from out
-void BufferedMEMWBRegisters::operate() {
-  out.operate();
-}
-
-void InstructionIssueUnit::operate() {
-  pcOut << (shouldStall ? pcOut.val : pcIn.val);
-}
-
 BufferedInstructionIssueUnit::BufferedInstructionIssueUnit() {
   buffer.pcOut >> out.pcIn;
-}
-
-void BufferedInstructionIssueUnit::bufferInputs() {
-  buffer.operate();
-}
-
-void BufferedInstructionIssueUnit::operate() {
-  out.operate();
 }
 
 ForwardingUnit::ForwardingUnit(
@@ -588,17 +570,17 @@ std::ostream& operator<<(std::ostream& os, const MEMWBRegisters &MEM_WB) {
   return os;
 }
 
-std::ostream& operator<<(std::ostream& os, const BufferedMEMWBRegisters &MEM_WB) {
-  os << "in BufferedMEMWBRegisters: " << std::endl;
-  os << "\t" << "buffer: " << MEM_WB.buffer << std::endl;
-  os << "\t" << "out: " << MEM_WB.out;
-  return os;
-}
-
 std::ostream& operator<<(std::ostream& os, const InstructionIssueUnit &issueUnit) {
   os << "in InstructionIssueUnit: " << std::endl;
   os << "\t" << "pcOut: " << issueUnit.pcOut << std::endl;
   os << "\t" << "shouldStall: " << std::boolalpha << issueUnit.shouldStall;
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const BufferedMEMWBRegisters &MEM_WB) {
+  os << "in BufferedMEMWBRegisters: " << std::endl;
+  os << "\t" << "buffer: " << MEM_WB.buffer << std::endl;
+  os << "\t" << "out: " << MEM_WB.out;
   return os;
 }
 
@@ -608,8 +590,6 @@ std::ostream& operator<<(std::ostream& os, const BufferedInstructionIssueUnit &i
   os << "\t" << "out: " << issueUnit.out;
   return os;
 }
-
-
 
 std::ostream& operator<<(std::ostream& os, const PipelinedProcessor &processor) {
   os << "pipelined processor" << std::endl;
