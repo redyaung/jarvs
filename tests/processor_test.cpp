@@ -120,16 +120,22 @@ namespace {
   };
 
   // see Patterson-Hennessy section 2.5 (pg 93)
-  TEST_F(ImmediateGeneratorUnitTest, ITypeInstructions) {
+  TEST_F(ImmediateGeneratorUnitTest, AluITypeInstructions) {
     uint32_t addi = 0b001111101000'00010'000'00001'0010011;   // addi x1, x2, 1000
     EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
     instr << addi;
     EXPECT_EQ(receiver.in1.val, 1000);
+  }
 
+  TEST_F(ImmediateGeneratorUnitTest, LoadITypeInstructions) {
     uint32_t lw = 0b001111101000'00010'010'00001'0000011;     // lw x1, 1000(x2)
     EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
     instr << lw;
     EXPECT_EQ(receiver.in1.val, 1000);
+  }
+
+  TEST_F(ImmediateGeneratorUnitTest, JalrITypeInstruction) {
+    // todo: implement this after implementing jalr
   }
 
   // see Patterson-Hennessy section 2.5 (pg 93)
@@ -138,6 +144,14 @@ namespace {
     EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
     instr << sw;
     EXPECT_EQ(receiver.in1.val, 1000);
+  }
+
+  TEST_F(ImmediateGeneratorUnitTest, UTypeInstructions) {
+    // todo: fill in body after implementing lui
+  }
+
+  TEST_F(ImmediateGeneratorUnitTest, UJTypeInstructions) {
+    // todo: fill in body after implementing jal
   }
 
   TEST(MultiplexerTest, BasicOperation) {

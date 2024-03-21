@@ -3,6 +3,47 @@
 #include <stdexcept>
 #include <ios>
 #include <utility>
+#include <optional>
+
+namespace __ProcessorUtils {
+  // corresponds to the four instruction types we defined in assembler
+  enum class InstructionFmt {
+    R, I, S, SB, U, UJ
+  };
+
+  // omitted: auipc(U), ecall(I), ebreak(I)
+  constexpr uint32_t RFmtOpcode = 0b0110011;
+  constexpr uint32_t aluIFmtOpcode = 0b0010011;
+  constexpr uint32_t loadIFmtOpcode = 0b0000011;
+  constexpr uint32_t jalrIFmtOpcode = 0b1100111;  // ONLY jalr
+  constexpr uint32_t SFmtOpcode = 0b0100011;      // stores
+  constexpr uint32_t SBFmtOpcode = 0b1100011;     // conditional branches
+  constexpr uint32_t UFmtOpcode = 0b0110111;      // ONLY lui
+  constexpr uint32_t UJFmtOpcode = 0b1101111;     // ONLY jal
+
+  constexpr std::optional<InstructionFmt> fmt(uint32_t opcode) {
+    switch (opcode) {
+      case RFmtOpcode:
+        return InstructionFmt::R;
+      case aluIFmtOpcode:
+      case loadIFmtOpcode:
+      case jalrIFmtOpcode:
+        return InstructionFmt::I;
+      case SFmtOpcode:
+        return InstructionFmt::S;
+      case SBFmtOpcode:
+        return InstructionFmt::SB;
+      case UFmtOpcode:
+        return InstructionFmt::U;
+      case UJFmtOpcode:
+        return InstructionFmt::UJ;
+      default:
+        return std::nullopt;
+    }
+  }
+}
+
+using namespace __ProcessorUtils;
 
 OutputSignal& OutputSignal::operator>>(InputSignal &signal) {
   syncedInputs.push_back(&signal);
@@ -52,21 +93,40 @@ void RegisterFileUnit::operate() {
   readData2 << intRegs.readRegister(readRegister2.val);
 }
 
-// todo: make this work for all immediate fields
+// issues:
+//  - the imm field for branches (SB & UJ) treat imm bits as byte offsets
+//    - in a real datapath, they are instead treated as halfword offsets
+//    - a fix is simple (x2) but the current version is easier to reason in assembly
 void ImmediateGenerator::operate() {
-  // hardcode for now -- have to figure out how to distinguish different instruction
-  // types from opcode alone
   uint32_t opcode = instruction.val & 0b1111111;      // first 7 bits
-  if (opcode == 0b0010011 || opcode == 0b0000011) {   // addi or lw (I-type)
-    uint32_t imm = extractBits(instruction.val, 20, 31);
-    immediate << imm;
-  } else if (opcode == 0b0100011 || opcode == 0b1100011) {   // S or SB
-    uint32_t immLow = extractBits(instruction.val, 7, 11);
-    uint32_t immHigh = extractBits(instruction.val, 25, 31);
-    uint32_t imm = (immHigh<< 5) + immLow;
-    immediate << imm;
-  } else {
-    // do nothing otherwise
+  std::optional<InstructionFmt> formatResult = fmt(opcode);
+  if (!formatResult) {
+    return;
+  }
+  InstructionFmt format = formatResult.value();
+  switch (format) {
+    case InstructionFmt::I: {   // alu, loads, jalr
+      immediate << extractBits(instruction.val, 20, 31);
+      break;
+    }
+    case InstructionFmt::S:     // stores
+    case InstructionFmt::SB: {  // conditional branches
+      uint32_t immLow = extractBits(instruction.val, 7, 11);
+      uint32_t immHigh = extractBits(instruction.val, 25, 31);
+      immediate << ((immHigh<< 5) + immLow);
+      break;
+    }
+    case InstructionFmt::U: {   // lui
+      uint32_t imm = extractBits(instruction.val, 12, 31);
+      immediate << (imm<< 12);
+      break;
+    }
+    case InstructionFmt::UJ: {  // jal
+      immediate << extractBits(instruction.val, 12, 31);
+      break;
+    }
+    default:
+      break;    // ignore R types
   }
 }
 
