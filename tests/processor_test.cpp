@@ -624,5 +624,59 @@ namespace {
     EXPECT_EQ(processor.registers.intRegs.readRegister(1), 1);
     EXPECT_EQ(processor.registers.intRegs.readRegister(2), 2);
   }
+
+  TEST(PipelinedProcessorTest, ConditionalBranchTaken) {
+    PipelinedProcessor processor(true);
+
+    std::vector<std::string> instructions {
+      "beq x0, x0, 12",   // jump 2 instructions ahead
+      "addi x1, x0, 1",   // should flush this one
+      "addi x2, x0, 2",   // should also jump over this one
+      "addi x3, x0, 3"    // << land here
+    };
+    for (auto i = 0; i < instructions.size(); ++i) {
+      Word encoded = encodeInstruction(instructions[i]);
+      processor.instructionMemory.memory.writeBlock(i * 4, Block<1>{encoded});
+    }
+
+    int numSkipped = 1;
+    int numCycles = 4 + instructions.size() - numSkipped;
+    for (auto cycle = 0; cycle < numCycles; cycle++) {
+      processor.executeOneCycle();
+      std::cout << processor << std::endl;
+    }
+
+    EXPECT_EQ(processor.registers.intRegs.readRegister(1), 0);
+    EXPECT_EQ(processor.registers.intRegs.readRegister(2), 0);
+    EXPECT_EQ(processor.registers.intRegs.readRegister(3), 3);
+  }
+
+  TEST(PipelinedProcessorTest, ConditionalBranchNotTaken) {
+    PipelinedProcessor processor(true);
+
+    std::vector<std::string> instructions {
+      "addi x1, x0, 1",
+      "add x0, x0, x0",   // nop    
+      "add x0, x0, x0",   // nop    
+      "beq x0, x1, 8",    // this branch won't be taken
+      "addi x2, x0, 1",
+      "addi x3, x0, 1"
+    };
+    for (auto i = 0; i < instructions.size(); ++i) {
+      Word encoded = encodeInstruction(instructions[i]);
+      processor.instructionMemory.memory.writeBlock(i * 4, Block<1>{encoded});
+    }
+
+    int numSkipped = 0;
+    int numCycles = 4 + instructions.size() - numSkipped;
+    for (auto cycle = 0; cycle < numCycles; cycle++) {
+      processor.executeOneCycle();
+      std::cout << processor << std::endl;
+    }
+
+    EXPECT_EQ(processor.registers.intRegs.readRegister(2), 1);
+    EXPECT_EQ(processor.registers.intRegs.readRegister(3), 1);
+  }
+
 }
 

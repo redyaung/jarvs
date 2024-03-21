@@ -52,6 +52,7 @@ void RegisterFileUnit::operate() {
   readData2 << intRegs.readRegister(readRegister2.val);
 }
 
+// todo: make this work for all immediate fields
 void ImmediateGenerator::operate() {
   // hardcode for now -- have to figure out how to distinguish different instruction
   // types from opcode alone
@@ -59,7 +60,7 @@ void ImmediateGenerator::operate() {
   if (opcode == 0b0010011 || opcode == 0b0000011) {   // addi or lw (I-type)
     uint32_t imm = extractBits(instruction.val, 20, 31);
     immediate << imm;
-  } else if (opcode == 0b0100011) {   // sw (S-type)
+  } else if (opcode == 0b0100011 || opcode == 0b1100011) {   // S or SB
     uint32_t immLow = extractBits(instruction.val, 7, 11);
     uint32_t immHigh = extractBits(instruction.val, 25, 31);
     uint32_t imm = (immHigh<< 5) + immLow;
@@ -87,6 +88,13 @@ void ALUControl::operate() {
     } else if (func3 == 0x0u) {             // add, addi
       aluOp << uint32_t(ALUOp::Add);
     }
+  }
+}
+
+// todo: make this general and make it work for all branch instructions
+void BranchALUControl::operate() {
+  if (func3.val == 0x0) {             // beq
+    branchAluOp << uint32_t(ALUOp::Sub);
   }
 }
 
@@ -129,7 +137,7 @@ void AndGate::operate() {
 
 void IFIDRegisters::operate() {
   pcOut << pcIn.val;
-  instructionOut << instructionIn.val;
+  instructionOut << (ctrlShouldFlush.val ? Word(0x0u) : instructionIn.val);
 }
 
 void IDEXRegisters::operate() {
@@ -140,13 +148,11 @@ void IDEXRegisters::operate() {
 
   ctrlAluSrcOut << ctrlAluSrcIn.val;
   ctrlAluOpOut << ctrlAluOpIn.val;
-  ctrlBranchOut << ctrlBranchIn.val;
   ctrlMemWriteOut << ctrlMemWriteIn.val;
   ctrlMemReadOut << ctrlMemReadIn.val;
   ctrlMemToRegOut << ctrlMemToRegIn.val;
   ctrlRegWriteOut << ctrlRegWriteIn.val;
   writeRegisterOut << writeRegisterIn.val;
-  pcOut << pcIn.val;
   readRegister1Out << readRegister1In.val;
   readRegister2Out << readRegister2In.val;
 }
@@ -154,12 +160,10 @@ void IDEXRegisters::operate() {
 void EXMEMRegisters::operate() {
   ctrlMemWriteOut << 0;     // avoid unintentional writes
 
-  branchAdderOutputOut << branchAdderOutputIn.val;
   zeroOut << zeroIn.val;
   aluOutputOut << aluOutputIn.val;
   readData2Out << readData2In.val;
 
-  ctrlBranchOut << ctrlBranchIn.val;
   ctrlMemWriteOut << ctrlMemWriteIn.val;
   ctrlMemReadOut << ctrlMemReadIn.val;
   ctrlMemToRegOut << ctrlMemToRegIn.val;
@@ -203,6 +207,18 @@ void InstructionIssueUnit::operate() {
   pcOut << (shouldStall ? pcOut.val : pcIn.val);
 }
 
+BufferedInstructionIssueUnit::BufferedInstructionIssueUnit() {
+  buffer.pcOut >> out.pcIn;
+}
+
+void BufferedInstructionIssueUnit::bufferInputs() {
+  buffer.operate();
+}
+
+void BufferedInstructionIssueUnit::operate() {
+  out.operate();
+}
+
 ForwardingUnit::ForwardingUnit(
   IDEXRegisters &ID_EX,
   EXMEMRegisters &EX_MEM,
@@ -238,7 +254,7 @@ void ForwardingUnit::operate() {
 
 DataHazardDetectionUnit::DataHazardDetectionUnit(
   bool isForwarding,
-  InstructionIssueUnit &issueUnit,
+  BufferedInstructionIssueUnit &issueUnit,
   IFIDRegisters &IF_ID,
   IDEXRegisters &ID_EX,
   EXMEMRegisters &EX_MEM
@@ -255,9 +271,9 @@ void DataHazardDetectionUnit::operate() {
     //      - we effectively achieve this by zeroing out the instruction itself
     //  2. setting the PC to be equal to the latest instruction (in IF)
     IF_ID->instructionIn.val = 0x0;
-    issueUnit->shouldStall = true;
+    issueUnit->out.shouldStall = true;
   } else {
-    issueUnit->shouldStall = false;
+    issueUnit->out.shouldStall = false;
   }
 }
 
@@ -301,32 +317,35 @@ void PipelinedProcessor::registerUnits(bool useForwarding) {
   syncedUnits.push_back(&EX_MEM);
   syncedUnits.push_back(&ID_EX);
   syncedUnits.push_back(&IF_ID);
-  syncedUnits.push_back(&issueUnit);
 
-  // must be called last as otherwise, there's no point in buffering
+  // buffered units should be called last (otherwise, no point in buffering)
+  syncedUnits.push_back(&issueUnit);
   syncedUnits.push_back(&MEM_WB);
 
   bufferedUnits.push_back(&MEM_WB);
+  bufferedUnits.push_back(&issueUnit);
 }
 
 void PipelinedProcessor::synchronizeSignals() {
   // fetch stage
   pcAdder.output >> pcChooser.input0;
-  EX_MEM.branchAdderOutputOut >> pcChooser.input1;
-  branchChooser.output >> pcChooser.control;
+  branchAddrAlu.output >> pcChooser.input1;
+  branchDecisionMaker.output >> pcChooser.control;
 
-  pcChooser.output >> issueUnit.pcIn;
+  pcChooser.output >> issueUnit.buffer.pcIn;
 
-  issueUnit.pcOut >> pcAdder.input0;
+  issueUnit.out.pcOut >> pcAdder.input0;
   pcAdder.input1.val = 4u;    // hardcoded
 
-  issueUnit.pcOut >> instructionMemory.address;
+  issueUnit.out.pcOut >> instructionMemory.address;
 
-  issueUnit.pcOut >> IF_ID.pcIn;
+  issueUnit.out.pcOut >> IF_ID.pcIn;
   instructionMemory.instruction >> IF_ID.instructionIn;
+  branchDecisionMaker.output >> IF_ID.ctrlShouldFlush;
 
   // decode stage
   IF_ID.instructionOut >> decoder.instruction;
+
   IF_ID.instructionOut >> control.instruction;
 
   decoder.readRegister1 >> registers.readRegister1;
@@ -337,16 +356,26 @@ void PipelinedProcessor::synchronizeSignals() {
 
   IF_ID.instructionOut >> immGen.instruction;
 
+  IF_ID.pcOut >> branchAddrAlu.input0;
+  immGen.immediate >> branchAddrAlu.input1;
+
+  decoder.func3 >> branchDecisionAluControl.func3;
+
+  registers.readData1 >> branchDecisionAlu.input0;
+  registers.readData2 >> branchDecisionAlu.input1;
+  branchDecisionAluControl.branchAluOp >> branchDecisionAlu.aluOp;
+
+  control.ctrlBranch >> branchDecisionMaker.input0;
+  branchDecisionAlu.zero >> branchDecisionMaker.input1;
+
   control.ctrlAluOp >> ID_EX.ctrlAluOpIn;
   control.ctrlAluSrc >> ID_EX.ctrlAluSrcIn;
-  control.ctrlBranch >> ID_EX.ctrlBranchIn;
   control.ctrlMemWrite >> ID_EX.ctrlMemWriteIn;
   control.ctrlMemRead >> ID_EX.ctrlMemReadIn;
   control.ctrlMemWrite >> ID_EX.ctrlMemWriteIn;
   control.ctrlMemToReg >> ID_EX.ctrlMemToRegIn;
   control.ctrlRegWrite >> ID_EX.ctrlRegWriteIn;
 
-  IF_ID.pcOut >> ID_EX.pcIn;
   registers.readData1 >> ID_EX.readData1In;
   registers.readData2 >> ID_EX.readData2In;
   immGen.immediate >> ID_EX.immediateIn;
@@ -356,9 +385,6 @@ void PipelinedProcessor::synchronizeSignals() {
   decoder.readRegister2 >> ID_EX.readRegister2In;
 
   // execute stage
-  ID_EX.pcOut >> branchAdder.input0;
-  ID_EX.immediateOut >> branchAdder.input1;
-
   ID_EX.readData2Out >> aluSrc2Chooser.input0;
   ID_EX.immediateOut >> aluSrc2Chooser.input1;
   ID_EX.ctrlAluSrcOut >> aluSrc2Chooser.control;
@@ -370,22 +396,17 @@ void PipelinedProcessor::synchronizeSignals() {
   ID_EX.instructionOut >> aluControl.instruction;
   ID_EX.ctrlAluOpOut >> aluControl.ctrlAluOp;
 
-  ID_EX.ctrlBranchOut >> EX_MEM.ctrlBranchIn;
   ID_EX.ctrlMemWriteOut >> EX_MEM.ctrlMemWriteIn;
   ID_EX.ctrlMemReadOut >> EX_MEM.ctrlMemReadIn;
   ID_EX.ctrlMemToRegOut >> EX_MEM.ctrlMemToRegIn;
   ID_EX.ctrlRegWriteOut >> EX_MEM.ctrlRegWriteIn;
   ID_EX.writeRegisterOut >> EX_MEM.writeRegisterIn;
 
-  branchAdder.output >> EX_MEM.branchAdderOutputIn;
   alu.zero >> EX_MEM.zeroIn;
   alu.output >> EX_MEM.aluOutputIn;
   ID_EX.readData2Out >> EX_MEM.readData2In;
 
   // memory stage
-  EX_MEM.ctrlBranchOut >> branchChooser.input0;
-  EX_MEM.zeroOut >> branchChooser.input1;
-
   EX_MEM.aluOutputOut >> dataMemory.address;
   EX_MEM.readData2Out >> dataMemory.writeData;
   EX_MEM.ctrlMemWriteOut >> dataMemory.ctrlMemWrite;
@@ -477,6 +498,13 @@ std::ostream& operator<<(std::ostream& os, const ALUControl &aluControl) {
   return os;
 }
 
+std::ostream& operator<<(std::ostream& os, const BranchALUControl &branchAluControl) {
+  os << "in branchALUControl: " << std::endl;
+  os << "\t" << "func3: " << branchAluControl.func3 << std::endl;
+  os << "\t" << "branchAluOp: " << branchAluControl.branchAluOp;
+  return os;
+}
+
 std::ostream& operator<<(std::ostream& os, const ALUUnit &alu) {
   os << "in ALUUnit: " << std::endl;
   os << "\t" << "input0: " << alu.input0 << std::endl;
@@ -514,10 +542,9 @@ std::ostream& operator<<(std::ostream& os, const AndGate &gate) {
 
 std::ostream& operator<<(std::ostream& os, const IFIDRegisters &IF_ID) {
   os << "in IFIDRegisters: " << std::endl;
-  // os << "\t" << "pcIn: " << IF_ID.pcIn << std::endl;
-  // os << "\t" << "instructionIn: " << IF_ID.instructionIn << std::endl;
   os << "\t" << "pcOut: " << IF_ID.pcOut << std::endl;
-  os << "\t" << "instructionOut: " << IF_ID.instructionOut;
+  os << "\t" << "instructionOut: " << IF_ID.instructionOut << std::endl;
+  os << "\t" << "ctrlShouldFlush: " << std::boolalpha << IF_ID.ctrlShouldFlush;
   return os;
 }
 
@@ -530,23 +557,19 @@ std::ostream& operator<<(std::ostream& os, const IDEXRegisters &ID_EX) {
   os << "\t" << "instructionOut: " << ID_EX.instructionOut << std::endl;
   os << "\t" << "ctrlAluSrcOut: " << ID_EX.ctrlAluSrcOut << std::endl;
   os << "\t" << "ctrlAluOpOut: " << ID_EX.ctrlAluOpOut << std::endl;
-  os << "\t" << "ctrlBranchOut: " << ID_EX.ctrlBranchOut << std::endl;
   os << "\t" << "ctrlMemWriteOut: " << ID_EX.ctrlMemWriteOut << std::endl;
   os << "\t" << "ctrlMemReadOut: " << ID_EX.ctrlMemReadOut << std::endl;
   os << "\t" << "ctrlMemToRegOut: " << ID_EX.ctrlMemToRegOut << std::endl;
   os << "\t" << "ctrlRegWriteOut: " << ID_EX.ctrlRegWriteOut << std::endl;
-  os << "\t" << "writeRegisterOut: " << ID_EX.writeRegisterOut << std::endl;
-  os << "\t" << "pcOut: " << ID_EX.pcOut;
+  os << "\t" << "writeRegisterOut: " << ID_EX.writeRegisterOut;
   return os;
 }
 
 std::ostream& operator<<(std::ostream& os, const EXMEMRegisters &EX_MEM) {
   os << "in EXMEMRegisters: " << std::endl;
-  os << "\t" << "branchAdderOutputOut: " << EX_MEM.branchAdderOutputOut << std::endl;
   os << "\t" << "zeroOut: " << EX_MEM.zeroOut << std::endl;
   os << "\t" << "aluOutputOut: " << EX_MEM.aluOutputOut << std::endl;
   os << "\t" << "readData2Out: " << EX_MEM.readData2Out << std::endl;
-  os << "\t" << "ctrlBranchOut: " << EX_MEM.ctrlBranchOut << std::endl;
   os << "\t" << "ctrlMemWriteOut: " << EX_MEM.ctrlMemWriteOut << std::endl;
   os << "\t" << "ctrlMemReadOut: " << EX_MEM.ctrlMemReadOut << std::endl;
   os << "\t" << "ctrlMemToRegOut: " << EX_MEM.ctrlMemToRegOut << std::endl;
@@ -574,10 +597,19 @@ std::ostream& operator<<(std::ostream& os, const BufferedMEMWBRegisters &MEM_WB)
 
 std::ostream& operator<<(std::ostream& os, const InstructionIssueUnit &issueUnit) {
   os << "in InstructionIssueUnit: " << std::endl;
-  os << "\t" << "pcOut: " << issueUnit.pcOut;
+  os << "\t" << "pcOut: " << issueUnit.pcOut << std::endl;
   os << "\t" << "shouldStall: " << std::boolalpha << issueUnit.shouldStall;
   return os;
 }
+
+std::ostream& operator<<(std::ostream& os, const BufferedInstructionIssueUnit &issueUnit) {
+  os << "in BufferedInstructionIssueUnit: " << std::endl;
+  os << "\t" << "buffer: " << issueUnit.buffer << std::endl;
+  os << "\t" << "out: " << issueUnit.out;
+  return os;
+}
+
+
 
 std::ostream& operator<<(std::ostream& os, const PipelinedProcessor &processor) {
   os << "pipelined processor" << std::endl;
@@ -593,15 +625,17 @@ std::ostream& operator<<(std::ostream& os, const PipelinedProcessor &processor) 
   os << "control: " << processor.control << std::endl;
   os << "registers: " << processor.registers << std::endl;
   os << "immGen: " << processor.immGen << std::endl;
+  os << "branchAddrAlu: " << processor.branchAddrAlu << std::endl;
+  os << "branchDecisionAluControl: " << processor.branchDecisionAluControl << std::endl;
+  os << "branchDecisionAlu: " << processor.branchDecisionAlu << std::endl;
+  os << "branchDecisionMaker: " << processor.branchDecisionMaker << std::endl;
 
   os << "ID_EX: " << processor.ID_EX << std::endl;
-  os << "branchAdder: " << processor.branchAdder << std::endl;
   os << "aluSrc2Chooser: " << processor.aluSrc2Chooser << std::endl;
   os << "alu: " << processor.alu << std::endl;
   os << "aluControl: " << processor.aluControl << std::endl;
 
   os << "EX_MEM: " << processor.EX_MEM << std::endl;
-  os << "branchChooser: " << processor.branchChooser << std::endl;
   os << "dataMemory: " << processor.dataMemory << std::endl;
 
   os << "MEM_WB: " << processor.MEM_WB << std::endl;

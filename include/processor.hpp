@@ -179,6 +179,14 @@ struct ALUControl : public OutOfSyncUnit {
   void operate() override;
 };
 
+// for now, issue AluOp for a standard ALU
+struct BranchALUControl : public OutOfSyncUnit {
+  InputSignal func3{this};
+  OutputSignal branchAluOp;
+
+  void operate() override;
+};
+
 struct ALUUnit : public OutOfSyncUnit {
   InputSignal input0{this};
   InputSignal input1{this};
@@ -226,6 +234,11 @@ struct IFIDRegisters : public InSyncUnit {
   InputSignal pcIn{this};
   InputSignal instructionIn{this};
 
+  // the ctrlShouldFlush function should technically come from the control unit but
+  // due to implementation details, we've directly forwarded the value from
+  // branchDecisionMaker instead -- it's still a control signal, hence the ctrl- prefix
+  InputSignal ctrlShouldFlush{this};
+
   OutputSignal pcOut;
   OutputSignal instructionOut;
 
@@ -246,25 +259,21 @@ struct IDEXRegisters : public InSyncUnit {
 
   InputSignal ctrlAluSrcIn{this};
   InputSignal ctrlAluOpIn{this};
-  InputSignal ctrlBranchIn{this};
   InputSignal ctrlMemWriteIn{this};
   InputSignal ctrlMemReadIn{this};
   InputSignal ctrlMemToRegIn{this};
   InputSignal ctrlRegWriteIn{this};
   InputSignal writeRegisterIn{this};
-  InputSignal pcIn{this};
   InputSignal readRegister1In{this};
   InputSignal readRegister2In{this};
 
   OutputSignal ctrlAluSrcOut;
   OutputSignal ctrlAluOpOut;
-  OutputSignal ctrlBranchOut;
   OutputSignal ctrlMemWriteOut;
   OutputSignal ctrlMemReadOut;
   OutputSignal ctrlMemToRegOut;
   OutputSignal ctrlRegWriteOut;
   OutputSignal writeRegisterOut;
-  OutputSignal pcOut;
   OutputSignal readRegister1Out;
   OutputSignal readRegister2Out;
 
@@ -272,24 +281,20 @@ struct IDEXRegisters : public InSyncUnit {
 };
 
 struct EXMEMRegisters : public InSyncUnit {
-  InputSignal branchAdderOutputIn{this};
   InputSignal zeroIn{this};
   InputSignal aluOutputIn{this};
   InputSignal readData2In{this};
 
-  OutputSignal branchAdderOutputOut;
   OutputSignal zeroOut;
   OutputSignal aluOutputOut;
   OutputSignal readData2Out;
 
-  InputSignal ctrlBranchIn{this};
   InputSignal ctrlMemWriteIn{this};
   InputSignal ctrlMemReadIn{this};
   InputSignal ctrlMemToRegIn{this};
   InputSignal ctrlRegWriteIn{this};
   InputSignal writeRegisterIn{this};
 
-  OutputSignal ctrlBranchOut;
   OutputSignal ctrlMemWriteOut;
   OutputSignal ctrlMemReadOut;
   OutputSignal ctrlMemToRegOut;
@@ -337,6 +342,15 @@ struct InstructionIssueUnit : public InSyncUnit {
   void operate() override;
 };
 
+// todo: make buffered units templated -- we can!
+struct BufferedInstructionIssueUnit : public BufferedInSyncUnit {
+  InstructionIssueUnit buffer, out;
+
+  BufferedInstructionIssueUnit();
+  void bufferInputs() override;
+  void operate() override;
+};
+
 struct ForwardingUnit : public InSyncUnit {
   // quite ugly; would be great if this can be manipulated like MEMWBRegisters
   IDEXRegisters *ID_EX;
@@ -353,7 +367,7 @@ struct ForwardingUnit : public InSyncUnit {
 
 // must be called before the forwarding unit
 struct DataHazardDetectionUnit : public InSyncUnit {
-  InstructionIssueUnit *issueUnit;
+  BufferedInstructionIssueUnit *issueUnit;
   IFIDRegisters *IF_ID;
   IDEXRegisters *ID_EX;
   EXMEMRegisters *EX_MEM;
@@ -361,7 +375,7 @@ struct DataHazardDetectionUnit : public InSyncUnit {
 
   DataHazardDetectionUnit(
     bool isForwarding,
-    InstructionIssueUnit &issueUnit,
+    BufferedInstructionIssueUnit &issueUnit,
     IFIDRegisters &IF_ID,
     IDEXRegisters &ID_EX,
     EXMEMRegisters &EX_MEM
@@ -390,8 +404,8 @@ struct Processor {
 
 struct PipelinedProcessor : public Processor {
   Multiplexer pcChooser;
-  InstructionIssueUnit issueUnit;
-  ALUUnit pcAdder;
+  BufferedInstructionIssueUnit issueUnit;
+  ALUUnit pcAdder;    // todo: make this a dedicated adder
   InstructionMemoryUnit instructionMemory;
 
   IFIDRegisters IF_ID;
@@ -399,15 +413,17 @@ struct PipelinedProcessor : public Processor {
   ControlUnit control;
   RegisterFileUnit registers;
   ImmediateGenerator immGen;
+  ALUUnit branchAddrAlu;    // todo: make this a dedicated adder (same as pcAdder)
+  BranchALUControl branchDecisionAluControl;
+  ALUUnit branchDecisionAlu;    // todo: make this a dedicated branch alu
+  AndGate branchDecisionMaker;
 
   IDEXRegisters ID_EX;
-  ALUUnit branchAdder;    // alu's default op is addition; reuse
   Multiplexer aluSrc2Chooser;
   ALUUnit alu;
   ALUControl aluControl;
 
   EXMEMRegisters EX_MEM;
-  AndGate branchChooser;
   DataMemoryUnit dataMemory;
 
   BufferedMEMWBRegisters MEM_WB;
@@ -422,6 +438,7 @@ struct PipelinedProcessor : public Processor {
   void synchronizeSignals();    // should also be called ONCE by constructor
 };
 
+// todo: add missing declarations for newly added instructions
 // pretty-printing funcs for the signals and functional units
 std::ostream& operator<<(std::ostream& os, const InputSignal &input);
 std::ostream& operator<<(std::ostream& os, const OutputSignal &output);
