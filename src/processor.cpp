@@ -214,10 +214,20 @@ void ALUControl::operate() {
   }
 }
 
-// todo: make this general and make it work for all branch instructions
 void BranchALUControl::operate() {
-  if (func3.val == 0x0) {             // beq
-    branchAluOp << uint32_t(ALUOp::Sub);
+  switch (func3.val) {
+    case 0x0:     // beq
+      branchAluOp << uint32_t(BranchALUOp::Eq);
+      break;
+    case 0x1:     // bne
+      branchAluOp << uint32_t(BranchALUOp::Ne);
+      break;
+    case 0x4:     // blt
+      branchAluOp << uint32_t(BranchALUOp::Lt);
+      break;
+    case 0x5:     // bge
+      branchAluOp << uint32_t(BranchALUOp::Ge);
+      break;
   }
 }
 
@@ -243,6 +253,23 @@ void ALUUnit::operate() {
       break;
   }
   zero << (output.val == 0u);
+}
+
+void BranchALUUnit::operate() {
+  switch (BranchALUOp{uint32_t(branchAluOp.val)}) {
+    case BranchALUOp::Eq:
+      output << (input0.val == input1.val);
+      break;
+    case BranchALUOp::Ne:
+      output << (input0.val != input1.val);
+      break;
+    case BranchALUOp::Lt:
+      output << (input0.val < input1.val);
+      break;
+    case BranchALUOp::Ge:
+      output << (input0.val >= input1.val);
+      break;
+  }
 }
 
 // won't read and write at the same time
@@ -485,10 +512,10 @@ void PipelinedProcessor::synchronizeSignals() {
 
   registers.readData1 >> branchDecisionAlu.input0;
   registers.readData2 >> branchDecisionAlu.input1;
-  branchDecisionAluControl.branchAluOp >> branchDecisionAlu.aluOp;
+  branchDecisionAluControl.branchAluOp >> branchDecisionAlu.branchAluOp;
 
   control.ctrlBranch >> condBranchDecisionMaker.input0;
-  branchDecisionAlu.zero >> condBranchDecisionMaker.input1;
+  branchDecisionAlu.output >> condBranchDecisionMaker.input1;
 
   condBranchDecisionMaker.output >> branchDecisionMaker.input0;
   control.ctrlIsJump >> branchDecisionMaker.input1;
@@ -639,6 +666,15 @@ std::ostream& operator<<(std::ostream& os, const ALUUnit &alu) {
   os << "\t" << "aluOp: " << alu.aluOp << std::endl;
   os << "\t" << "output: " << alu.output << std::endl;
   os << "\t" << "zero: " << alu.zero;
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const BranchALUUnit &branchAlu) {
+  os << "in BranchALUUnit: " << std::endl;
+  os << "\t" << "input0: " << branchAlu.input0 << std::endl;
+  os << "\t" << "input1: " << branchAlu.input1 << std::endl;
+  os << "\t" << "branchAluOp: " << branchAlu.branchAluOp << std::endl;
+  os << "\t" << "output: " << branchAlu.output;
   return os;
 }
 

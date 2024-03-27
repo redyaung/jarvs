@@ -186,7 +186,13 @@ struct ALUControl : public OutOfSyncUnit {
   void operate() override;
 };
 
-// for now, issue AluOp for a standard ALU
+// used only by branch alu and control
+enum class BranchALUOp : uint32_t {
+  Eq, Ne, Lt, Ge
+};
+
+// controls a specialized branch alu unit
+//  - currently supports all bxx instructions except bltu and bgeu
 struct BranchALUControl : public OutOfSyncUnit {
   InputSignal func3{this};
   OutputSignal branchAluOp;
@@ -200,6 +206,15 @@ struct ALUUnit : public OutOfSyncUnit {
   InputSignal aluOp{this};
   OutputSignal output;
   OutputSignal zero;
+
+  void operate() override;
+};
+
+struct BranchALUUnit : public OutOfSyncUnit {
+  InputSignal input0{this};
+  InputSignal input1{this};
+  InputSignal branchAluOp{this};
+  OutputSignal output;    // 1 = should branch
 
   void operate() override;
 };
@@ -437,7 +452,7 @@ struct PipelinedProcessor : public Processor {
   Multiplexer branchAddrChooser;
   ALUUnit branchAddrAlu;    // todo: make this a dedicated adder (same as pcAdder)
   BranchALUControl branchDecisionAluControl;
-  ALUUnit branchDecisionAlu;    // todo: make this a dedicated branch alu
+  BranchALUUnit branchDecisionAlu;
   AndGate condBranchDecisionMaker;
   OrGate branchDecisionMaker;
 
@@ -473,6 +488,7 @@ std::ostream& operator<<(std::ostream& os, const Multiplexer &mux);
 std::ostream& operator<<(std::ostream& os, const ALUControl &aluControl);
 std::ostream& operator<<(std::ostream& os, const BranchALUControl &branchAluControl);
 std::ostream& operator<<(std::ostream& os, const ALUUnit &alu);
+std::ostream& operator<<(std::ostream& os, const BranchALUUnit &branchAlu);
 std::ostream& operator<<(std::ostream& os, const DataMemoryUnit &dataMemory);
 std::ostream& operator<<(std::ostream& os, const InstructionMemoryUnit &instructionMemory);
 std::ostream& operator<<(std::ostream& os, const AndGate &andGate);

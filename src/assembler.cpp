@@ -99,6 +99,9 @@ namespace _Assembler {
 
     // SB
     {"beq",   {0b1100011, 0x0, std::nullopt}},
+    {"bne",   {0b1100011, 0x1, std::nullopt}},
+    {"blt",   {0b1100011, 0x4, std::nullopt}},
+    {"bge",   {0b1100011, 0x5, std::nullopt}},
 
     // U
 
@@ -117,7 +120,7 @@ namespace _Assembler {
     "sw"
   };
   std::vector<std::string> SBs {
-    "beq"
+    "beq", "bne", "blt", "bge"
   };
   std::vector<std::string> Us {
 

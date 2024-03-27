@@ -248,6 +248,7 @@ namespace {
     EXPECT_EQ(receiver.in1.val, uint32_t(ALUOp::Add));
   }
 
+  // (unused) since branch logic has been moved to the decode stage
   // beq: opcode = 1100011, func3 = 0 -- imm = 0, x1, x2
   TEST_F(ALUControlTest, Beq) {
     uint32_t beq = 0b0000000'00001'00010'000'00000'1100011;
@@ -744,5 +745,58 @@ namespace {
     EXPECT_EQ(processor.registers.intRegs.readRegister(10), 0);
     EXPECT_EQ(processor.registers.intRegs.readRegister(11), 0);
     EXPECT_EQ(processor.registers.intRegs.readRegister(12), 1);
+  }
+
+  // caution: check test for correctness before searching for bugs!
+  TEST(PipelinedProcessorTest, ConditionalBranchTaken_Bne) {
+    PipelinedProcessor processor(true);
+
+    processor.registers.intRegs.writeRegister(1, 1);
+    std::vector<std::string> instructions {
+      "bne x0, x1, 12",   // jump 2 instructions ahead
+      "addi x10, x0, 1",   // should flush this one
+      "addi x11, x0, 2",   // should also jump over this one
+      "addi x12, x0, 3"    // << land here
+    };
+    registerInstructions(processor, instructions);
+    executeInstructions(processor, instructions.size(), 2, 1);
+
+    EXPECT_EQ(processor.registers.intRegs.readRegister(10), 0);
+    EXPECT_EQ(processor.registers.intRegs.readRegister(11), 0);
+    EXPECT_EQ(processor.registers.intRegs.readRegister(12), 3);
+  }
+
+  TEST(PipelinedProcessorTest, ConditionalBranchNotTaken_Blt) {
+    PipelinedProcessor processor(true);
+
+    processor.registers.intRegs.writeRegister(1, 1);
+    std::vector<std::string> instructions {
+      "blt x1, x0, 8",    // this branch won't be taken
+      "addi x2, x0, 1",
+      "addi x3, x0, 1"
+    };
+    registerInstructions(processor, instructions);
+    executeInstructions(processor, instructions.size());
+
+    EXPECT_EQ(processor.registers.intRegs.readRegister(2), 1);
+    EXPECT_EQ(processor.registers.intRegs.readRegister(3), 1);
+  }
+
+  TEST(PipelinedProcessorTest, ConditionalBranchTaken_Bge) {
+    PipelinedProcessor processor(true);
+
+    processor.registers.intRegs.writeRegister(1, 1);
+    std::vector<std::string> instructions {
+      "bge x1, x0, 12",   // jump 2 instructions ahead
+      "addi x10, x0, 1",   // should flush this one
+      "addi x11, x0, 2",   // should also jump over this one
+      "addi x12, x0, 3"    // << land here
+    };
+    registerInstructions(processor, instructions);
+    executeInstructions(processor, instructions.size(), 2, 1);
+
+    EXPECT_EQ(processor.registers.intRegs.readRegister(10), 0);
+    EXPECT_EQ(processor.registers.intRegs.readRegister(11), 0);
+    EXPECT_EQ(processor.registers.intRegs.readRegister(12), 3);
   }
 }
