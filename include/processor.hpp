@@ -114,20 +114,6 @@ struct DecodeUnit : public OutOfSyncUnit {
   void operate() override;
 };
 
-// handles only R-type, I-type, lw, sw and beq for now
-struct ControlUnit : public OutOfSyncUnit {
-  InputSignal instruction{this};
-  OutputSignal ctrlRegWrite;
-  OutputSignal ctrlAluSrc;
-  OutputSignal ctrlAluOp;
-  OutputSignal ctrlBranch;
-  OutputSignal ctrlMemWrite;
-  OutputSignal ctrlMemRead;
-  OutputSignal ctrlMemToReg;
-
-  void operate() override;
-};
-
 struct RegisterFileUnit : public OutOfSyncUnit {
   InputSignal readRegister1{this};
   InputSignal readRegister2{this};
@@ -141,6 +127,27 @@ struct RegisterFileUnit : public OutOfSyncUnit {
   // inputs are not only possible but valid
   RegisterFile<RegisterType::Integer> intRegs;
 
+  void operate() override;
+};
+
+// handles only R-type, I-type, lw, sw and beq for now
+struct ControlUnit : public OutOfSyncUnit {
+  InputSignal instruction{this};
+  InputSignal pc{this};
+  InputSignal writeRegister{this};
+  OutputSignal ctrlRegWrite;
+  OutputSignal ctrlAluSrc;
+  OutputSignal ctrlAluOp;
+  OutputSignal ctrlMemWrite;
+  OutputSignal ctrlMemRead;
+  OutputSignal ctrlMemToReg;
+  OutputSignal ctrlBranch;
+  OutputSignal ctrlUseRegBase;
+  OutputSignal ctrlIsJump;
+
+  RegisterFile<RegisterType::Integer> *intRegs;
+
+  ControlUnit(RegisterFile<RegisterType::Integer> *intRegs);
   void operate() override;
 };
 
@@ -223,6 +230,14 @@ struct InstructionMemoryUnit : public OutOfSyncUnit {
 };
 
 struct AndGate : public OutOfSyncUnit {
+  InputSignal input0{this};
+  InputSignal input1{this};
+  OutputSignal output;
+
+  void operate() override;
+};
+
+struct OrGate : public OutOfSyncUnit {
   InputSignal input0{this};
   InputSignal input1{this};
   OutputSignal output;
@@ -384,15 +399,21 @@ struct DataHazardDetectionUnit : public InSyncUnit {
   bool shouldStall(uint32_t rs1, uint32_t rs2);
 };
 
-// the processor is responsible for registering the InSyncUnits that it uses into
-// the syncedUnits list
+// the processor is responsible for registering the appropriate synchronized units,
+// buffered units and priority units.
+//  - priority units usually contain the forwarding and hazard detection unit
+//  - buffered units are used to break execution order dependencies between sync units
 struct Processor {
   std::vector<InSyncUnit*> syncedUnits;
   std::vector<BufferedInSyncUnit*> bufferedUnits;
+  std::vector<InSyncUnit*> priorityUnits;
   int clockCycle = 0;
 
   virtual void executeOneCycle() {
     ++clockCycle;
+    for (InSyncUnit *unit : priorityUnits) {
+      unit->operate();
+    }
     for (BufferedInSyncUnit *unit : bufferedUnits) {
       unit->bufferInputs();
     }
@@ -410,13 +431,15 @@ struct PipelinedProcessor : public Processor {
 
   IFIDRegisters IF_ID;
   DecodeUnit decoder;
-  ControlUnit control;
   RegisterFileUnit registers;
+  ControlUnit control;
   ImmediateGenerator immGen;
+  Multiplexer branchAddrChooser;
   ALUUnit branchAddrAlu;    // todo: make this a dedicated adder (same as pcAdder)
   BranchALUControl branchDecisionAluControl;
   ALUUnit branchDecisionAlu;    // todo: make this a dedicated branch alu
-  AndGate branchDecisionMaker;
+  AndGate condBranchDecisionMaker;
+  OrGate branchDecisionMaker;
 
   IDEXRegisters ID_EX;
   Multiplexer aluSrc2Chooser;
@@ -453,6 +476,7 @@ std::ostream& operator<<(std::ostream& os, const ALUUnit &alu);
 std::ostream& operator<<(std::ostream& os, const DataMemoryUnit &dataMemory);
 std::ostream& operator<<(std::ostream& os, const InstructionMemoryUnit &instructionMemory);
 std::ostream& operator<<(std::ostream& os, const AndGate &andGate);
+std::ostream& operator<<(std::ostream& os, const OrGate &orGate);
 std::ostream& operator<<(std::ostream& os, const IFIDRegisters &IF_ID);
 std::ostream& operator<<(std::ostream& os, const IDEXRegisters &ID_EX);
 std::ostream& operator<<(std::ostream& os, const EXMEMRegisters &EX_MEM);

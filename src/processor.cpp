@@ -21,7 +21,7 @@ namespace __ProcessorUtils {
   constexpr uint32_t UFmtOpcode = 0b0110111;      // ONLY lui
   constexpr uint32_t UJFmtOpcode = 0b1101111;     // ONLY jal
 
-  constexpr std::optional<InstructionFmt> fmt(uint32_t opcode) {
+  constexpr InstructionFmt fmt(uint32_t opcode) {
     switch (opcode) {
       case RFmtOpcode:
         return InstructionFmt::R;
@@ -38,8 +38,16 @@ namespace __ProcessorUtils {
       case UJFmtOpcode:
         return InstructionFmt::UJ;
       default:
-        return std::nullopt;
+        throw std::invalid_argument("invalid opcode: " + std::to_string(opcode));
     }
+  }
+
+  constexpr inline uint32_t opcode(Word instruction) {
+    return extractBits(instruction, 0, 6);
+  }
+
+  constexpr inline bool isNop(Word instruction) {
+    return instruction == 0x0;
   }
 }
 
@@ -66,22 +74,49 @@ void DecodeUnit::operate() {
   func7 << extractBits(instruction.val, 25, 31);
 }
 
+ControlUnit::ControlUnit(RegisterFile<RegisterType::Integer> *intRegs)
+  : intRegs{intRegs} {}
+
 // see Patterson-Hennessy fig 4.26 (pg 281)
 void ControlUnit::operate() {
-  uint32_t opcode = extractBits(instruction.val, 0, 6);
-  bool isRType = (opcode == 0b0110011);
-  bool isIType = (opcode == 0b0010011);
-  bool isLw = (opcode == 0b0000011);
-  bool isSw = (opcode == 0b0100011);
-  bool isBeq = (opcode == 0b1100011);
-  // for some reason, this kind of conversion may be necessary
-  ctrlRegWrite << (isRType || isLw || isIType ? 0b1 : 0b0);
-  ctrlAluSrc << (isLw || isSw || isIType ? 0b1 : 0b0);
-  ctrlAluOp << (isBeq ? 0b01 : (isRType || isIType ? 0b10 : 0b00));
-  ctrlBranch << (isBeq ? 0b1 : 0b0);
-  ctrlMemWrite << (isSw ? 0b1 : 0b0);
-  ctrlMemRead << (isLw ? 0b1 : 0b0);
-  ctrlMemToReg << (isLw ? 0b1 : 0b0);
+  // zero out control signals on a nop instruction
+  if (isNop(instruction.val)) {
+    ctrlRegWrite << 0u;
+    ctrlMemWrite << 0u;
+    ctrlMemRead << 0u;
+    ctrlBranch << 0u;
+    ctrlUseRegBase << 0u;
+    ctrlIsJump << 0u;
+    return;
+  }
+
+  uint32_t _opcode = opcode(instruction.val);
+  InstructionFmt _fmt = fmt(_opcode);
+  // this entire list seems like a load of crap
+  bool isR = (_fmt == InstructionFmt::R);
+  bool isAluI = (_opcode == aluIFmtOpcode);
+  bool isLoad = (_opcode == loadIFmtOpcode);
+  bool isStore = (_fmt == InstructionFmt::S);
+  bool isCondBranch = (_fmt == InstructionFmt::SB);
+  bool isJalr = (_opcode == jalrIFmtOpcode);
+  bool isJal = (_fmt == InstructionFmt::UJ);
+  bool isJump = isJalr || isJal;
+
+  ctrlRegWrite << (isR || isLoad || isAluI);
+  ctrlAluSrc << (isLoad || isStore || isAluI);
+  ctrlAluOp << (isCondBranch ? 0b01 : (isR || isAluI ? 0b10 : 0b00));
+  ctrlMemWrite << isStore;
+  ctrlMemRead << isLoad;
+  ctrlMemToReg << isLoad;
+  // branching logic (conditional + unconditional)
+  ctrlBranch << isCondBranch;
+  ctrlUseRegBase << isJalr;
+  ctrlIsJump << isJump;
+
+  // link the return address register here (the linking happens *immediately*)
+  if (isJump && writeRegister.val != 0) {
+    intRegs->writeRegister(writeRegister.val, pc.val + 4);
+  }
 }
 
 void RegisterFileUnit::operate() {
@@ -98,12 +133,11 @@ void RegisterFileUnit::operate() {
 //    - in a real datapath, they are instead treated as halfword offsets
 //    - a fix is simple (x2) but the current version is easier to reason in assembly
 void ImmediateGenerator::operate() {
-  uint32_t opcode = instruction.val & 0b1111111;      // first 7 bits
-  std::optional<InstructionFmt> formatResult = fmt(opcode);
-  if (!formatResult) {
+  // ignore nop instructions
+  if (isNop(instruction.val)) {
     return;
   }
-  InstructionFmt format = formatResult.value();
+  InstructionFmt format = fmt(opcode(instruction.val));
   switch (format) {
     case InstructionFmt::I: {   // alu, loads, jalr
       immediate << extractBits(instruction.val, 20, 31);
@@ -192,7 +226,11 @@ void InstructionMemoryUnit::operate() {
 }
 
 void AndGate::operate() {
-  output << (input0.val & input1.val);
+  output << (input0.val && input1.val);
+}
+
+void OrGate::operate() {
+  output << (input0.val || input1.val);
 }
 
 void IFIDRegisters::operate() {
@@ -312,10 +350,10 @@ void DataHazardDetectionUnit::operate() {
     //  1. deasserting MemWrite, RegWrite and Branch signals of instruction in IF
     //      - we effectively achieve this by zeroing out the instruction itself
     //  2. setting the PC to be equal to the latest instruction (in IF)
-    IF_ID->instructionIn.val = 0x0;
-    issueUnit->out.shouldStall = true;
+    IF_ID->ctrlShouldFlush.val = true;
+    issueUnit->buffer.shouldStall = true;
   } else {
-    issueUnit->out.shouldStall = false;
+    issueUnit->buffer.shouldStall = false;
   }
 }
 
@@ -342,7 +380,8 @@ bool DataHazardDetectionUnit::shouldStall(uint32_t rs1, uint32_t rs2) {
 
 PipelinedProcessor::PipelinedProcessor(bool useForwarding)
   : forwardingUnit(ID_EX, EX_MEM, MEM_WB),
-    hazardDetectionUnit(useForwarding, issueUnit, IF_ID, ID_EX, EX_MEM)
+    hazardDetectionUnit(useForwarding, issueUnit, IF_ID, ID_EX, EX_MEM),
+    control(&registers.intRegs)
 {
   synchronizeSignals();
   registerUnits(useForwarding);
@@ -350,10 +389,10 @@ PipelinedProcessor::PipelinedProcessor(bool useForwarding)
 
 // the order determines the order in which these in-sync units are called
 void PipelinedProcessor::registerUnits(bool useForwarding) {
-  // hazard detection and forwarding unit are called before any other in-sync units
-  syncedUnits.push_back(&hazardDetectionUnit);
+  // priority unit should generally not be registered into syncedUnits like bufferedUnits
+  priorityUnits.push_back(&hazardDetectionUnit);
   if (useForwarding) {
-    syncedUnits.push_back(&forwardingUnit);
+    priorityUnits.push_back(&forwardingUnit);
   }
 
   syncedUnits.push_back(&EX_MEM);
@@ -389,6 +428,8 @@ void PipelinedProcessor::synchronizeSignals() {
   IF_ID.instructionOut >> decoder.instruction;
 
   IF_ID.instructionOut >> control.instruction;
+  IF_ID.pcOut >> control.pc;
+  decoder.writeRegister >> control.writeRegister;
 
   decoder.readRegister1 >> registers.readRegister1;
   decoder.readRegister2 >> registers.readRegister2;
@@ -398,7 +439,11 @@ void PipelinedProcessor::synchronizeSignals() {
 
   IF_ID.instructionOut >> immGen.instruction;
 
-  IF_ID.pcOut >> branchAddrAlu.input0;
+  IF_ID.pcOut >> branchAddrChooser.input0;
+  registers.readData1 >> branchAddrChooser.input1;
+  control.ctrlUseRegBase >> branchAddrChooser.control;
+
+  branchAddrChooser.output >> branchAddrAlu.input0;
   immGen.immediate >> branchAddrAlu.input1;
 
   decoder.func3 >> branchDecisionAluControl.func3;
@@ -407,8 +452,11 @@ void PipelinedProcessor::synchronizeSignals() {
   registers.readData2 >> branchDecisionAlu.input1;
   branchDecisionAluControl.branchAluOp >> branchDecisionAlu.aluOp;
 
-  control.ctrlBranch >> branchDecisionMaker.input0;
-  branchDecisionAlu.zero >> branchDecisionMaker.input1;
+  control.ctrlBranch >> condBranchDecisionMaker.input0;
+  branchDecisionAlu.zero >> condBranchDecisionMaker.input1;
+
+  condBranchDecisionMaker.output >> branchDecisionMaker.input0;
+  control.ctrlIsJump >> branchDecisionMaker.input1;
 
   control.ctrlAluOp >> ID_EX.ctrlAluOpIn;
   control.ctrlAluSrc >> ID_EX.ctrlAluSrcIn;
@@ -497,10 +545,12 @@ std::ostream& operator<<(std::ostream& os, const ControlUnit &control) {
   os << "\t" << "ctrlRegWrite: " << control.ctrlRegWrite << std::endl;
   os << "\t" << "ctrlAluSrc: " << control.ctrlAluSrc << std::endl;
   os << "\t" << "ctrlAluOp: " << control.ctrlAluOp << std::endl;
-  os << "\t" << "ctrlBranch: " << control.ctrlBranch << std::endl;
   os << "\t" << "ctrlMemWrite: " << control.ctrlMemWrite << std::endl;
   os << "\t" << "ctrlMemRead: " << control.ctrlMemRead << std::endl;
-  os << "\t" << "ctrlMemToReg: " << control.ctrlMemToReg;
+  os << "\t" << "ctrlMemToReg: " << control.ctrlMemToReg << std::endl;
+  os << "\t" << "ctrlBranch: " << control.ctrlBranch << std::endl;
+  os << "\t" << "ctrlUseRegBase: " << control.ctrlUseRegBase << std::endl;
+  os << "\t" << "ctrlIsJump: " << control.ctrlIsJump;
   return os;
 }
 
@@ -576,6 +626,14 @@ std::ostream& operator<<(std::ostream& os, const InstructionMemoryUnit &instruct
 
 std::ostream& operator<<(std::ostream& os, const AndGate &gate) {
   os << "in AndGate: " << std::endl;
+  os << "\t" << "input0: " << gate.input0 << std::endl;
+  os << "\t" << "input1: " << gate.input1 << std::endl;
+  os << "\t" << "output: " << gate.output;
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const OrGate &gate) {
+  os << "in OrGate: " << std::endl;
   os << "\t" << "input0: " << gate.input0 << std::endl;
   os << "\t" << "input1: " << gate.input1 << std::endl;
   os << "\t" << "output: " << gate.output;
@@ -665,9 +723,11 @@ std::ostream& operator<<(std::ostream& os, const PipelinedProcessor &processor) 
   os << "control: " << processor.control << std::endl;
   os << "registers: " << processor.registers << std::endl;
   os << "immGen: " << processor.immGen << std::endl;
+  os << "branchAddrChooser: " << processor.branchAddrChooser << std::endl;
   os << "branchAddrAlu: " << processor.branchAddrAlu << std::endl;
   os << "branchDecisionAluControl: " << processor.branchDecisionAluControl << std::endl;
   os << "branchDecisionAlu: " << processor.branchDecisionAlu << std::endl;
+  os << "condBranchDecisionMaker: " << processor.condBranchDecisionMaker << std::endl;
   os << "branchDecisionMaker: " << processor.branchDecisionMaker << std::endl;
 
   os << "ID_EX: " << processor.ID_EX << std::endl;

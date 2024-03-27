@@ -84,6 +84,7 @@ namespace _Assembler {
     // I
     {"addi",  {0b0010011, 0x0, std::nullopt}},
     {"lw",    {0b0000011, 0x2, std::nullopt}},
+    {"jalr",  {0b1100111, 0x0, std::nullopt}},
 
     // S
     {"sw",    {0b0100011, 0x2, std::nullopt}},
@@ -94,6 +95,7 @@ namespace _Assembler {
     // U
 
     // UJ
+    {"jal",   {0b1101111, std::nullopt, std::nullopt}}
   };
 
   // note: new instructions *must* be registered here
@@ -101,7 +103,7 @@ namespace _Assembler {
     "add", "sub"
   };
   std::vector<std::string> Is {
-    "addi", "lw"
+    "addi", "lw", "jalr"
   };
   std::vector<std::string> Ss {
     "sw"
@@ -113,7 +115,7 @@ namespace _Assembler {
 
   };
   std::vector<std::string> UJs {
-
+    "jal"
   };
 
   // contains a list of valid instructions for each format so that premature matches to

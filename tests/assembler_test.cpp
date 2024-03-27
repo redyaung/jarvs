@@ -51,4 +51,16 @@ namespace {
     uint32_t beq = 0b0000000'00010'00001'000'00100'1100011;
     EXPECT_EQ(instruction, beq);
   }
+
+  TEST(EncodeInstructionSet, Jal) {
+    Word instruction = encodeInstruction("jal x1, 8");
+    uint32_t jal = 0b0000000'00000'00001'000'00001'1101111;
+    EXPECT_EQ(instruction, jal);
+  }
+
+  TEST(EncodeInstructionSet, Jalr) {
+    Word instruction = encodeInstruction("jalr x1, 16(x2)");
+    uint32_t jalr = 0b000000010000'00010'000'00001'1100111;
+    EXPECT_EQ(instruction, jalr);
+  }
 }

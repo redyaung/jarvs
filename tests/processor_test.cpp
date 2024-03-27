@@ -692,5 +692,57 @@ namespace {
     EXPECT_EQ(processor.registers.intRegs.readRegister(3), 1);
   }
 
-}
+  TEST(PipelinedProcessorTest, JumpAndLink) {
+    PipelinedProcessor processor(true);
 
+    std::vector<std::string> instructions {
+      "jal x1, 8",
+      "add x0, x0, x0",
+      "addi x10, x0, 3"
+    };
+    for (auto i = 0; i < instructions.size(); ++i) {
+      Word encoded = encodeInstruction(instructions[i]);
+      processor.instructionMemory.memory.writeBlock(i * 4, Block<1>{encoded});
+    }
+
+    int numStalled = 1;
+    int numSkipped = 1;
+    int numCycles = 4 + instructions.size() - numSkipped + numStalled;
+    for (auto cycle = 0; cycle < numCycles; cycle++) {
+      processor.executeOneCycle();
+      std::cout << processor << std::endl;
+    }
+
+    EXPECT_EQ(processor.registers.intRegs.readRegister(1), 8);
+    EXPECT_EQ(processor.registers.intRegs.readRegister(10), 3);
+  }
+
+  TEST(PipelinedProcessorTest, JumpAndLinkRegister) {
+    PipelinedProcessor processor(true);
+
+    // x1 = 12 (4th instruction)
+    processor.registers.intRegs.writeRegister(1, 12);
+    std::vector<std::string> instructions {
+      "jalr x0, 0(x1)",
+      "addi x10, x0, 1",
+      "addi x11, x0, 1",
+      "addi x12, x0, 1"
+    };
+    for (auto i = 0; i < instructions.size(); ++i) {
+      Word encoded = encodeInstruction(instructions[i]);
+      processor.instructionMemory.memory.writeBlock(i * 4, Block<1>{encoded});
+    }
+
+    int numStalled = 1;
+    int numSkipped = 2;
+    int numCycles = 4 + instructions.size() - numSkipped + numStalled;
+    for (auto cycle = 0; cycle < numCycles; cycle++) {
+      processor.executeOneCycle();
+      std::cout << processor << std::endl;
+    }
+
+    EXPECT_EQ(processor.registers.intRegs.readRegister(10), 0);
+    EXPECT_EQ(processor.registers.intRegs.readRegister(11), 0);
+    EXPECT_EQ(processor.registers.intRegs.readRegister(12), 1);
+  }
+}
