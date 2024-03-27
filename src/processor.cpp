@@ -1,5 +1,6 @@
 #include "processor.hpp"
 #include "utils.hpp"
+#include <initializer_list>
 #include <stdexcept>
 #include <ios>
 #include <utility>
@@ -44,6 +45,12 @@ namespace __ProcessorUtils {
 
   constexpr inline uint32_t opcode(Word instruction) {
     return extractBits(instruction, 0, 6);
+  }
+  constexpr inline uint32_t funct3(Word instruction) {
+    return extractBits(instruction, 12, 14);
+  }
+  constexpr inline uint32_t funct7(Word instruction) {
+    return extractBits(instruction, 25, 31);
   }
 
   constexpr inline bool isNop(Word instruction) {
@@ -170,18 +177,40 @@ void Multiplexer::operate() {
 
 // refer to Patterson-Hennessy fig 4.12 (pg 270)
 void ALUControl::operate() {
-  if (ctrlAluOp.val == 0b00u) {         // lw or sw
+  assert(contains(std::array{0b00, 0b01, 0b10}, ctrlAluOp.val));
+  if (ctrlAluOp.val == 0b00u) {         // loads and stores
     aluOp << uint32_t(ALUOp::Add);
-  } else if (ctrlAluOp.val == 0b01u) {  // beq
+    return;
+  }
+  if (ctrlAluOp.val == 0b01u) {         // conditional branches (currently only beq)
     aluOp << uint32_t(ALUOp::Sub);
-  } else if (ctrlAluOp.val == 0b10u) {  // R-type & I-type
-    uint32_t func7 = extractBits(instruction.val, 25, 31);
-    uint32_t func3 = extractBits(instruction.val, 12, 14);
-    if (func7 == 0x20u && func3 == 0x0u) {  // sub
-      aluOp << uint32_t(ALUOp::Sub);
-    } else if (func3 == 0x0u) {             // add, addi
-      aluOp << uint32_t(ALUOp::Add);
+    return;
+  }
+  // R-format and ALU I-format instructions
+  switch (funct3(instruction.val)) {
+    case 0x0: {   // add or sub
+      switch (funct7(instruction.val)) {
+        case 0x00:    // add
+          aluOp << uint32_t(ALUOp::Add);
+          break;
+        case 0x20:    // sub
+          aluOp << uint32_t(ALUOp::Sub);
+          break;
+      }
+      break;
     }
+    case 0x6:   // or
+      aluOp << uint32_t(ALUOp::Or);
+      break;
+    case 0x7:   // and
+      aluOp << uint32_t(ALUOp::And);
+      break;
+    case 0x1:   // sll
+      aluOp << uint32_t(ALUOp::Sll);
+      break;
+    case 0x5:   // srl
+      aluOp << uint32_t(ALUOp::Srl);
+      break;
   }
 }
 
@@ -205,6 +234,12 @@ void ALUUnit::operate() {
       break;
     case ALUOp::Or:
       output << (int(input0.val) | int(input1.val));
+      break;
+    case ALUOp::Sll:
+      output << (int(input0.val)<< int(input1.val));
+      break;
+    case ALUOp::Srl:
+      output << (int(input0.val)>> int(input1.val));
       break;
   }
   zero << (output.val == 0u);

@@ -171,7 +171,7 @@ struct Multiplexer : public OutOfSyncUnit {
 
 // only support a limited set of operations now
 enum class ALUOp : uint32_t {
-  Add, Sub, And, Or
+  Add, Sub, Or, And, Sll, Srl
 };
 
 // the alu bits that control the alu are a departure from how alu bits actually work in

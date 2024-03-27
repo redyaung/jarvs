@@ -80,9 +80,17 @@ namespace _Assembler {
     // R
     {"add",   {0b0110011, 0x0, 0x00}},
     {"sub",   {0b0110011, 0x0, 0x20}},
+    {"or",    {0b0110011, 0x6, 0x00}},
+    {"and",   {0b0110011, 0x7, 0x00}},
+    {"sll",   {0b0110011, 0x1, 0x00}},
+    {"srl",   {0b0110011, 0x5, 0x00}},
 
     // I
     {"addi",  {0b0010011, 0x0, std::nullopt}},
+    {"ori",   {0b0010011, 0x6, std::nullopt}},
+    {"andi",  {0b0010011, 0x7, std::nullopt}},
+    {"slli",  {0b0010011, 0x1, std::nullopt}},
+    {"srli",  {0b0010011, 0x5, std::nullopt}},
     {"lw",    {0b0000011, 0x2, std::nullopt}},
     {"jalr",  {0b1100111, 0x0, std::nullopt}},
 
@@ -100,10 +108,10 @@ namespace _Assembler {
 
   // note: new instructions *must* be registered here
   std::vector<std::string> Rs {
-    "add", "sub"
+    "add", "sub", "or", "and", "sll", "srl"
   };
   std::vector<std::string> Is {
-    "addi", "lw", "jalr"
+    "addi", "ori", "andi", "slli", "srli", "lw", "jalr"
   };
   std::vector<std::string> Ss {
     "sw"

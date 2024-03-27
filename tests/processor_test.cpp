@@ -409,6 +409,63 @@ namespace {
     EXPECT_EQ(processor.registers.intRegs.readRegister(1), -1);
   }
 
+  // newly added tests; uses the assembler -- more of integration tests rather than unit tests
+  TEST(PipelinedProcessorTest, OrInstruction) {
+    PipelinedProcessor processor;
+
+    processor.registers.intRegs.writeRegister(11, 1u);
+    processor.registers.intRegs.writeRegister(12, 0u);
+    std::vector<std::string> instructions {
+      "or x10, x11, x12"
+    };
+    registerInstructions(processor, instructions);
+    executeInstructions(processor, instructions.size());
+
+    EXPECT_EQ(processor.registers.intRegs.readRegister(10), 1u);
+  }
+
+  TEST(PipelinedProcessorTest, AndInstruction) {
+    PipelinedProcessor processor;
+
+    processor.registers.intRegs.writeRegister(11, 1u);
+    processor.registers.intRegs.writeRegister(12, 0u);
+    std::vector<std::string> instructions {
+      "and x10, x11, x12"
+    };
+    registerInstructions(processor, instructions);
+    executeInstructions(processor, instructions.size());
+
+    EXPECT_EQ(processor.registers.intRegs.readRegister(10), 0u);
+  }
+
+  TEST(PipelinedProcessorTest, ShiftLeftLogicalInstruction) {
+    PipelinedProcessor processor;
+
+    processor.registers.intRegs.writeRegister(11, 1u);
+    processor.registers.intRegs.writeRegister(12, 3u);
+    std::vector<std::string> instructions {
+      "sll x10, x11, x12"
+    };
+    registerInstructions(processor, instructions);
+    executeInstructions(processor, instructions.size());
+
+    EXPECT_EQ(processor.registers.intRegs.readRegister(10), 8u);
+  }
+
+  TEST(PipelinedProcessorTest, ShiftRightLogicalInstruction) {
+    PipelinedProcessor processor;
+
+    processor.registers.intRegs.writeRegister(11, 0b1101u);
+    processor.registers.intRegs.writeRegister(12, 2u);
+    std::vector<std::string> instructions {
+      "srl x10, x11, x12"
+    };
+    registerInstructions(processor, instructions);
+    executeInstructions(processor, instructions.size());
+
+    EXPECT_EQ(processor.registers.intRegs.readRegister(10), 0b11u);
+  }
+
   TEST(PipelinedProcessorTest, AddImmediateInstruction) {
     PipelinedProcessor processor;
 
@@ -420,6 +477,19 @@ namespace {
       processor.executeOneCycle();
     }
     EXPECT_EQ(processor.registers.intRegs.readRegister(1), 1024u);
+  }
+
+  TEST(PipelinedProcessorTest, AndImmediateInstruction) {
+    PipelinedProcessor processor;
+
+    processor.registers.intRegs.writeRegister(11, 0u);
+    std::vector<std::string> instructions {
+      "andi x10, x11, 1"
+    };
+    registerInstructions(processor, instructions);
+    executeInstructions(processor, instructions.size());
+
+    EXPECT_EQ(processor.registers.intRegs.readRegister(10), 0u);
   }
 
   TEST(PipelinedProcessorTest, LoadInstruction) {
