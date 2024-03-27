@@ -160,8 +160,12 @@ namespace {
     EXPECT_EQ(receiver.in1.val, 1000);
   }
 
+  // depends on correctness of assembler's jalr encoding (jal is similar)
   TEST_F(ImmediateGeneratorUnitTest, JalrITypeInstruction) {
-    // todo: implement this after implementing jalr
+    auto jalr = encodeInstruction("jalr x0, 16(x2)");
+    EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
+    instr << jalr;
+    EXPECT_EQ(receiver.in1.val, 16);
   }
 
   // see Patterson-Hennessy section 2.5 (pg 93)
@@ -177,7 +181,10 @@ namespace {
   }
 
   TEST_F(ImmediateGeneratorUnitTest, UJTypeInstructions) {
-    // todo: fill in body after implementing jal
+    auto jal = encodeInstruction("jal x0, 32");
+    EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
+    instr << jal;
+    EXPECT_EQ(receiver.in1.val, 32);
   }
 
   TEST(MultiplexerTest, BasicOperation) {
