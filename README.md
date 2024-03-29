@@ -1,27 +1,27 @@
-# just another risc-v simulator
+# Just Another Risc-v Simulator
 
-## building
-1. go to the root directory in the project
-2. run `cmake -S . -B build` to generate build files
-3. run `cmake --build build` to build your targets
+## Building
+1. Go to the root directory in the project.
+2. Run `cmake -S . -B build` to generate build files.
+3. Run `cmake --build build` to build your targets.
 
-## testing
-1. complete the steps in the section "building"
-2. run `ctest --test-dir build`
-3. to selectively run a test suite, pass the `--gtest_filter` flag to the test executable
+## Testing
+1. Complete the steps in the section "Building".
+2. Run `ctest --test-dir build`.
+3. To selectively run a test suite, pass the `--gtest_filter` flag to the test executable
 directly instead of using `ctest`. (`ctest` doesn't support this sadly).
-    - a caveat is to *prepend the asterisks `*` with a backslash* to avoid funky zsh problems.
-    - for example, if you want to run only pipelined processor tests, you would run
-    `./build/simulator_test --gtest_filter=Pipelined\*`
+    - A caveat is to *prepend the asterisks `*` with a backslash* to avoid funky zsh problems.
+    - For example, if you want to run only pipelined processor tests, you would run
+    `./build/simulator_test --gtest_filter=Pipelined\*`.
 
-## development notes
+## Development Notes
 
-### adding new instructions to assembler
-- go to `src/assembler.cpp`
-- add the instruction to the `fixedFieldsLookup` map -- you will need the `opcode`, `func3`
+### Adding new instructions to assembler
+1. Go to `src/assembler.cpp`.
+2. Add the instruction to the `fixedFieldsLookup` map -- you will need the `opcode`, `func3`
 and `func7` fields (if applicable).
-- add the name of the instruction (e.g. `add`) to the appropriate `vector` containing the
+3. Add the name of the instruction (e.g. `add`) to the appropriate `vector` containing the
 instruction names -- one of `Rs`, `Is`, `Ss`, `SBs`, `Us`, `UJs`.
 
-*note: adding new instructions to the processor doesn't end at the assembler. you will also*
+*Note: Adding new instructions to the processor doesn't end at the assembler. You will also*
 *need to configure the processor to handle the instruction.*
