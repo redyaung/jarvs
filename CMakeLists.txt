@@ -4,14 +4,23 @@ project(simulator)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-add_executable(
-  simulator
-  src/main.cpp
+# export the core files as a library (also imported by Swift wrapper library)
+add_library(simulator_lib STATIC
   src/processor.cpp
   src/assembler.cpp
 )
+target_include_directories(simulator_lib
+  PUBLIC ${PROJECT_SOURCE_DIR}/include
+)
+
+add_executable(simulator
+  src/main.cpp
+)
 target_include_directories(simulator
   PRIVATE ${PROJECT_SOURCE_DIR}/include
+)
+target_link_libraries(simulator
+  simulator_lib
 )
 
 # google test configuration
@@ -24,21 +33,18 @@ set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
 enable_testing()
-add_executable(
-  simulator_test
-  src/processor.cpp
-  src/assembler.cpp
+add_executable(simulator_test
   tests/memory_test.cpp
   tests/processor_test.cpp
   tests/assembler_test.cpp
 )
-target_link_libraries(
-  simulator_test
-  GTest::gtest_main
-  GTest::gmock_main   # bring in Google Mock
-)
 target_include_directories(simulator_test
   PRIVATE ${PROJECT_SOURCE_DIR}/include
+)
+target_link_libraries(simulator_test
+  simulator_lib
+  GTest::gtest_main
+  GTest::gmock_main   # bring in Google Mock
 )
 
 include(GoogleTest)
