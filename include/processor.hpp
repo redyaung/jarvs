@@ -267,7 +267,8 @@ struct IFIDRegisters : public InSyncUnit {
   // the ctrlShouldFlush function should technically come from the control unit but
   // due to implementation details, we've directly forwarded the value from
   // branchDecisionMaker instead -- it's still a control signal, hence the ctrl- prefix
-  InputSignal ctrlShouldFlush{this};
+  InputSignal ctrlBranchShouldFlush{this};
+  bool ctrlShouldFlush = false;
 
   OutputSignal pcOut;
   OutputSignal instructionOut;
@@ -337,7 +338,9 @@ struct EXMEMRegisters : public InSyncUnit {
 
   // only used for analytics and visualization
   InputSignal pcIn{this};
+  InputSignal instructionIn{this};
   OutputSignal pcOut;
+  OutputSignal instructionOut;
 
   void operate() override;
 };
@@ -359,7 +362,9 @@ struct MEMWBRegisters : public InSyncUnit {
 
   // only used for analytics and visualization
   InputSignal pcIn{this};
+  InputSignal instructionIn{this};
   OutputSignal pcOut;
+  OutputSignal instructionOut;
 
   void operate() override;
 };

@@ -306,8 +306,9 @@ void OrGate::operate() {
 }
 
 void IFIDRegisters::operate() {
+  bool willFlush = ctrlShouldFlush || ctrlBranchShouldFlush.val;
   pcOut << pcIn.val;
-  instructionOut << (ctrlShouldFlush.val ? Word(0x0u) : instructionIn.val);
+  instructionOut << (willFlush ? Word(0x0u) : instructionIn.val);
 }
 
 void IDEXRegisters::operate() {
@@ -331,6 +332,7 @@ void IDEXRegisters::operate() {
 
 void EXMEMRegisters::operate() {
   ctrlMemWriteOut << 0;     // avoid unintentional writes
+  ctrlMemReadOut << 0;      // avoid unintentional reads
 
   zeroOut << zeroIn.val;
   aluOutputOut << aluOutputIn.val;
@@ -343,6 +345,7 @@ void EXMEMRegisters::operate() {
   writeRegisterOut << writeRegisterIn.val;
 
   pcOut << pcIn.val;
+  instructionOut << instructionIn.val;
 }
 
 void MEMWBRegisters::operate() {
@@ -357,6 +360,7 @@ void MEMWBRegisters::operate() {
   ctrlRegWriteOut << ctrlRegWriteIn.val;
 
   pcOut << pcIn.val;
+  instructionOut << instructionIn.val;
 }
 
 void InstructionIssueUnit::operate() {
@@ -373,6 +377,7 @@ BufferedMEMWBRegisters::BufferedMEMWBRegisters() {
   buffer.ctrlRegWriteOut >> out.ctrlRegWriteIn;
 
   buffer.pcOut >> out.pcIn;
+  buffer.instructionOut >> out.instructionIn;
 }
 
 BufferedInstructionIssueUnit::BufferedInstructionIssueUnit() {
@@ -403,7 +408,7 @@ void ForwardingUnit::operate() {
     } else if (
       MEM_WB->buffer.ctrlRegWriteIn.val &&
       MEM_WB->buffer.writeRegisterIn.val != 0 &&
-      MEM_WB->buffer.writeRegisterIn.val == ID_EX->readRegister1In.val
+      MEM_WB->buffer.writeRegisterIn.val == registerNum
     ) {
       Word val = MEM_WB->buffer.ctrlMemToRegIn.val ?
         MEM_WB->buffer.readMemoryDataIn.val : MEM_WB->buffer.aluOutputIn.val;
@@ -430,9 +435,10 @@ void DataHazardDetectionUnit::operate() {
     //  1. deasserting MemWrite, RegWrite and Branch signals of instruction in IF
     //      - we effectively achieve this by zeroing out the instruction itself
     //  2. setting the PC to be equal to the latest instruction (in IF)
-    IF_ID->ctrlShouldFlush.val = true;
+    IF_ID->ctrlShouldFlush = true;
     issueUnit->buffer.shouldStall = true;
   } else {
+    IF_ID->ctrlShouldFlush = false;
     issueUnit->buffer.shouldStall = false;
   }
 }
@@ -502,7 +508,7 @@ void PipelinedProcessor::synchronizeSignals() {
 
   issueUnit.out.pcOut >> IF_ID.pcIn;
   instructionMemory.instruction >> IF_ID.instructionIn;
-  branchDecisionMaker.output >> IF_ID.ctrlShouldFlush;
+  branchDecisionMaker.output >> IF_ID.ctrlBranchShouldFlush;
 
   // decode stage
   IF_ID.instructionOut >> decoder.instruction;
@@ -579,6 +585,7 @@ void PipelinedProcessor::synchronizeSignals() {
   ID_EX.readData2Out >> EX_MEM.readData2In;
 
   ID_EX.pcOut >> EX_MEM.pcIn;
+  ID_EX.instructionOut >> EX_MEM.instructionIn;
 
   // memory stage
   EX_MEM.aluOutputOut >> dataMemory.address;
@@ -594,6 +601,7 @@ void PipelinedProcessor::synchronizeSignals() {
   EX_MEM.ctrlRegWriteOut >> MEM_WB.buffer.ctrlRegWriteIn;
 
   EX_MEM.pcOut >> MEM_WB.buffer.pcIn;
+  EX_MEM.instructionOut >> MEM_WB.buffer.instructionIn;
 
   // write-back stage
   MEM_WB.out.aluOutputOut >> writeBackSrcChooser.input0;
@@ -739,6 +747,7 @@ std::ostream& operator<<(std::ostream& os, const IFIDRegisters &IF_ID) {
   os << "in IFIDRegisters: " << std::endl;
   os << "\t" << "pcOut: " << IF_ID.pcOut << std::endl;
   os << "\t" << "instructionOut: " << IF_ID.instructionOut << std::endl;
+  os << "\t" << "ctrlBranchShouldFlush: " << std::boolalpha << IF_ID.ctrlBranchShouldFlush << std::endl;
   os << "\t" << "ctrlShouldFlush: " << std::boolalpha << IF_ID.ctrlShouldFlush;
   return os;
 }

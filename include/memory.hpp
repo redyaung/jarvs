@@ -94,10 +94,9 @@ struct MainMemory {
 
   template<uint32_t W>
   Block<W> readBlock(uint32_t addr) {
-    std::cout << "reading 0x" << std::hex << addr << std::dec << " from memory" << std::endl;
     if (!isAligned(addr, W)) {
-      throw std::invalid_argument("address is not word-aligned");
-    } else if (addr + nbytes(W) >= (1<< N)) {
+      throw std::invalid_argument("address " + std::to_string(addr) + " is not word-aligned");
+    } else if (addr + nbytes(W) > (1<< N)) {
       throw std::out_of_range("end address is out of address space");
     }
     Block<W> block;
@@ -107,10 +106,9 @@ struct MainMemory {
 
   template<uint32_t W>
   void writeBlock(uint32_t addr, Block<W> block) {
-    std::cout << "writing 0x" << std::hex << addr << std::dec << " to memory" << std::endl;
     if (!isAligned(addr, W)) {
-      throw std::invalid_argument("address is not word-aligned");
-    } else if (addr + nbytes(W) >= (1<< N)) {
+      throw std::invalid_argument("address " + std::to_string(addr) + " is not word-aligned");
+    } else if (addr + nbytes(W) > (1<< N)) {
       throw std::out_of_range("end address is out of address space");
     }
     std::copy(block.bytes, block.bytes + nbytes(W), bytes + addr);
@@ -167,16 +165,14 @@ struct Cache {
 
   template<uint32_t _W>
   Block<_W> readBlock(uint32_t addr) {
-    std::cout << "reading 0x" << std::hex << addr << std::dec << " from cache" << std::endl;
     static_assert(W % _W == 0, "requested block size must divide internal block size");
     if (!isAligned(addr, _W)) {
-      throw std::invalid_argument("address is not word-aligned");
+      throw std::invalid_argument("address " + std::to_string(addr) + " is not word-aligned");
     }
     uint32_t tag = tagBits(addr);
     uint32_t setIdx = indexBits(addr);
     std::optional<uint32_t> entryIdx = findCacheEntry(addr);
     if (!entryIdx.has_value()) {  // cache miss
-      std::cout << "cache miss" << std::endl;
       // find a free cache entry -- may not exist
       uint32_t startingEntryIdx = setIdx * S;
       auto freeEntry = std::find_if(
@@ -186,7 +182,6 @@ struct Cache {
       );
       // evict one of the entries randomly if there are no free entries
       if (freeEntry == entries + startingEntryIdx + S) {
-        std::cout << "performing cache eviction" << std::endl;
         auto selectEvictionIndex = [&]() -> uint32_t {
           if constexpr (Plc == ReplacementPolicy::PreciseLRU) {
             auto evictEntryIt = std::min_element(entries + startingEntryIdx,
@@ -208,7 +203,6 @@ struct Cache {
           }
         };
         uint32_t evictedIdx = selectEvictionIndex();
-        std::cout << "evictedIdx: " << evictedIdx << std::endl;
         // (write-back only) if cache entry is dirty, write it back before eviction
         if constexpr (WSch == WriteScheme::WriteBack) {
           if (entries[evictedIdx].dirty) {
@@ -223,7 +217,6 @@ struct Cache {
         }
         entryIdx = std::make_optional(evictedIdx);
       } else {
-        std::cout << "found an empty entry in the set" << std::endl;
         entryIdx = std::make_optional(freeEntry - entries);
       }
       // read the block at the requested address from main memory
@@ -231,7 +224,7 @@ struct Cache {
       Block block = mainMem.template readBlock<W>(startingAddr);
       entries[*entryIdx] = Entry{true, false, tag, block};
     } else {
-      std::cout << "cache hit" << std::endl;
+
     }
     // now, the entry at entryIdx contains a valid cache
     Entry &entry = entries[*entryIdx];
@@ -247,13 +240,11 @@ struct Cache {
 
   template<uint32_t _W>
   void writeBlock(uint32_t addr, Block<_W> block) {
-    std::cout << "writing 0x" << std::hex << addr << std::dec << " to cache" << std::endl;
     static_assert(W % _W == 0, "requested block size must divide internal block size");
     if (!isAligned(addr, _W)) {
-      throw std::invalid_argument("address is not word-aligned");
+      throw std::invalid_argument("address " + std::to_string(addr) + " is not word-aligned");
     }
     if (std::optional<uint32_t> entryIdx = findCacheEntry(addr)) {  // cache hit
-      std::cout << "cache hit - writing to cache entry" << std::endl;
       Entry &entry = entries[*entryIdx];
       Block<W> &entryBlock = entry.block;
       uint32_t blockAddr = addr % nbytes(W);
