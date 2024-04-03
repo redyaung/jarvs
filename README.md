@@ -1,4 +1,4 @@
-# Just Another Risc-v Simulator
+# Just Another RISC-V Simulator
 
 ## Building
 1. Go to the root directory in the project.
@@ -25,3 +25,12 @@ instruction names -- one of `Rs`, `Is`, `Ss`, `SBs`, `Us`, `UJs`.
 
 *Note: Adding new instructions to the processor doesn't end at the assembler. You will also*
 *need to configure the processor to handle the instruction.*
+
+## Issues
+- Forwarding logic still needs to be added for branch and `jalr` instructions. This means
+there needs to be at least 2 intervening instructions between calculation of a result and
+the usage of the result (register) in a branch or `jalr` instruction.
+- Currently, the assembler is lacking support for
+    1. labels (`END_LOOP:`) - hardcode offsets in branch instructions for now
+    2. comments (`#`)
+    3. alternate numerical formats for immediates (hexadecimal, octals, binary)

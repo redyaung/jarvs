@@ -4,7 +4,20 @@ project(simulator)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# export the core files as a library (also imported by Swift wrapper library)
+# ftxui configuration
+include(FetchContent)
+FetchContent_Declare(ftxui
+  GIT_REPOSITORY https://github.com/ArthurSonzogni/ftxui
+  GIT_TAG v5.0.0
+)
+
+FetchContent_GetProperties(ftxui)
+if(NOT ftxui_POPULATED)
+  FetchContent_Populate(ftxui)
+  add_subdirectory(${ftxui_SOURCE_DIR} ${ftxui_BINARY_DIR} EXCLUDE_FROM_ALL)
+endif()
+
+# export the core files as a library
 add_library(simulator_lib STATIC
   src/processor.cpp
   src/assembler.cpp
@@ -13,6 +26,7 @@ target_include_directories(simulator_lib
   PUBLIC ${PROJECT_SOURCE_DIR}/include
 )
 
+# main executable
 add_executable(simulator
   src/main.cpp
 )
@@ -21,10 +35,13 @@ target_include_directories(simulator
 )
 target_link_libraries(simulator
   simulator_lib
+  # ftxui libraries
+  ftxui::screen
+  ftxui::dom
+  ftxui::component
 )
 
 # google test configuration
-include(FetchContent)
 FetchContent_Declare(
   googletest
   URL https://github.com/google/googletest/archive/03597a01ee50ed33e9dfd640b249b4be3799d395.zip
