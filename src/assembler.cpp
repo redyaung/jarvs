@@ -44,13 +44,13 @@ namespace _Assembler {
     "^\\s*([a-z]+) x(\\d{1,2}), x(\\d{1,2}), x(\\d{1,2})"
   );
   std::regex IFmtRegex(
-    "^\\s*([a-z]+) x(\\d{1,2}), x(\\d{1,2}), (\\d+)"
+    "^\\s*([a-z]+) x(\\d{1,2}), x(\\d{1,2}), (-?\\d+)"
   );
   std::regex UFmtRegex(
-    "^\\s*([a-z]+) x(\\d{1,2}), (\\d+)"
+    "^\\s*([a-z]+) x(\\d{1,2}), (-?\\d+)"
   );
   std::regex I_FmtRegex(
-    "^\\s*([a-z]+) x(\\d{1,2}), (\\d+)\\(x(\\d{1,2})\\)"
+    "^\\s*([a-z]+) x(\\d{1,2}), (-?\\d+)\\(x(\\d{1,2})\\)"
   );
 
   enum class ParseFmt : char {
@@ -164,7 +164,7 @@ namespace _Assembler {
     std::optional<uint8_t> rs1;
     std::optional<uint8_t> rs2;
     std::optional<uint8_t> rd;
-    std::optional<uint32_t> imm;
+    std::optional<int32_t> imm;
   };
 
   inline void checkRegisterInBounds(uint32_t reg) {
@@ -199,7 +199,7 @@ namespace _Assembler {
         .rd = vFields.rd.value(),
         .func3 = fFields.func3.value(),
         .rs1 = vFields.rs1.value(),
-        .imm = vFields.imm.value()
+        .imm = uint32_t(vFields.imm.value())
       };
     } else if (contains(Ss, name) || contains(SBs, name)) {
       checkRegisterInBounds(vFields.rs1.value());
@@ -219,7 +219,7 @@ namespace _Assembler {
       return U {
         .opcode = fFields.opcode,
         .rd = vFields.rd.value(),
-        .imm = vFields.imm.value()
+        .imm = uint32_t(vFields.imm.value())
       };
     } else {
       throw std::invalid_argument("cannot find instruction: " + name);

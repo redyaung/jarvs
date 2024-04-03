@@ -307,6 +307,10 @@ struct IDEXRegisters : public InSyncUnit {
   OutputSignal readRegister1Out;
   OutputSignal readRegister2Out;
 
+  // only used for analytics and visualization
+  InputSignal pcIn{this};
+  OutputSignal pcOut;
+
   void operate() override;
 };
 
@@ -331,6 +335,10 @@ struct EXMEMRegisters : public InSyncUnit {
   OutputSignal ctrlRegWriteOut;
   OutputSignal writeRegisterOut;
 
+  // only used for analytics and visualization
+  InputSignal pcIn{this};
+  OutputSignal pcOut;
+
   void operate() override;
 };
 
@@ -348,6 +356,10 @@ struct MEMWBRegisters : public InSyncUnit {
   OutputSignal ctrlMemToRegOut;
   OutputSignal ctrlRegWriteOut;
   OutputSignal writeRegisterOut;
+
+  // only used for analytics and visualization
+  InputSignal pcIn{this};
+  OutputSignal pcOut;
 
   void operate() override;
 };

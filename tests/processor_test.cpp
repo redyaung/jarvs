@@ -726,6 +726,21 @@ namespace {
     EXPECT_EQ(processor.registers.intRegs.readRegister(10), 3);
   }
 
+  TEST(PipelinedProcessorTest, JumpAndLinkBackwards) {
+    PipelinedProcessor processor(true);
+
+    processor.registers.intRegs.writeRegister(10, 0);
+    std::vector<std::string> instructions {
+      "addi x10, x10, 10",
+      "add x10, x10, x10",
+      "jal x0, -8",
+    };
+    registerInstructions(processor, instructions);
+    executeInstructions(processor, instructions.size() + 2, 0, 1);
+
+    EXPECT_EQ(processor.registers.intRegs.readRegister(10), 60);
+  }
+
   TEST(PipelinedProcessorTest, JumpAndLinkRegister) {
     PipelinedProcessor processor(true);
 

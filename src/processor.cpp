@@ -56,6 +56,13 @@ namespace __ProcessorUtils {
   constexpr inline bool isNop(Word instruction) {
     return instruction == 0x0;
   }
+
+  // see https://graphics.stanford.edu/~seander/bithacks.html#FixedSignExtend
+  template<unsigned B>
+  constexpr inline int32_t signExtend(int32_t x) {
+    struct { int32_t x: B; } s;
+    return s.x = x;
+  }
 }
 
 using namespace __ProcessorUtils;
@@ -147,23 +154,26 @@ void ImmediateGenerator::operate() {
   InstructionFmt format = fmt(opcode(instruction.val));
   switch (format) {
     case InstructionFmt::I: {   // alu, loads, jalr
-      immediate << extractBits(instruction.val, 20, 31);
+      uint32_t rawBits = extractBits(instruction.val, 20, 31);
+      immediate << int32_t(signExtend<12>(rawBits));
       break;
     }
     case InstructionFmt::S:     // stores
     case InstructionFmt::SB: {  // conditional branches
       uint32_t immLow = extractBits(instruction.val, 7, 11);
       uint32_t immHigh = extractBits(instruction.val, 25, 31);
-      immediate << ((immHigh<< 5) + immLow);
+      uint32_t rawBits = (immHigh<< 5) + immLow;
+      immediate << int32_t(signExtend<12>(rawBits));
       break;
     }
     case InstructionFmt::U: {   // lui
       uint32_t imm = extractBits(instruction.val, 12, 31);
-      immediate << (imm<< 12);
+      immediate << int32_t(imm<< 12);
       break;
     }
     case InstructionFmt::UJ: {  // jal
-      immediate << extractBits(instruction.val, 12, 31);
+      uint32_t rawBits = extractBits(instruction.val, 12, 31);
+      immediate << int32_t(signExtend<20>(rawBits));
       break;
     }
     default:
@@ -234,25 +244,25 @@ void BranchALUControl::operate() {
 void ALUUnit::operate() {
   switch (ALUOp{uint32_t(aluOp.val)}) {
     case ALUOp::Add:
-      output << (int(input0.val) + int(input1.val));
+      output << (int32_t(input0.val) + int32_t(input1.val));
       break;
     case ALUOp::Sub:
-      output << (int(input0.val) - int(input1.val));
+      output << (int32_t(input0.val) - int32_t(input1.val));
       break;
     case ALUOp::And:
-      output << (int(input0.val) & int(input1.val));
+      output << (int32_t(input0.val) & int32_t(input1.val));
       break;
     case ALUOp::Or:
-      output << (int(input0.val) | int(input1.val));
+      output << (int32_t(input0.val) | int32_t(input1.val));
       break;
     case ALUOp::Sll:
-      output << (int(input0.val)<< int(input1.val));
+      output << (int32_t(input0.val)<< int32_t(input1.val));
       break;
     case ALUOp::Srl:
-      output << (int(input0.val)>> int(input1.val));
+      output << (int32_t(input0.val)>> int32_t(input1.val));
       break;
   }
-  zero << (output.val == 0u);
+  zero << (output.val == 0);
 }
 
 void BranchALUUnit::operate() {
@@ -315,6 +325,8 @@ void IDEXRegisters::operate() {
   writeRegisterOut << writeRegisterIn.val;
   readRegister1Out << readRegister1In.val;
   readRegister2Out << readRegister2In.val;
+
+  pcOut << pcIn.val;
 }
 
 void EXMEMRegisters::operate() {
@@ -329,6 +341,8 @@ void EXMEMRegisters::operate() {
   ctrlMemToRegOut << ctrlMemToRegIn.val;
   ctrlRegWriteOut << ctrlRegWriteIn.val;
   writeRegisterOut << writeRegisterIn.val;
+
+  pcOut << pcIn.val;
 }
 
 void MEMWBRegisters::operate() {
@@ -341,6 +355,8 @@ void MEMWBRegisters::operate() {
   writeRegisterOut << writeRegisterIn.val;
   // only assert the write control signal after other signals are properly set
   ctrlRegWriteOut << ctrlRegWriteIn.val;
+
+  pcOut << pcIn.val;
 }
 
 void InstructionIssueUnit::operate() {
@@ -355,6 +371,8 @@ BufferedMEMWBRegisters::BufferedMEMWBRegisters() {
   buffer.ctrlMemToRegOut >> out.ctrlMemToRegIn;
   buffer.writeRegisterOut >> out.writeRegisterIn;
   buffer.ctrlRegWriteOut >> out.ctrlRegWriteIn;
+
+  buffer.pcOut >> out.pcIn;
 }
 
 BufferedInstructionIssueUnit::BufferedInstructionIssueUnit() {
@@ -536,6 +554,8 @@ void PipelinedProcessor::synchronizeSignals() {
   decoder.readRegister1 >> ID_EX.readRegister1In;
   decoder.readRegister2 >> ID_EX.readRegister2In;
 
+  IF_ID.pcOut >> ID_EX.pcIn;
+
   // execute stage
   ID_EX.readData2Out >> aluSrc2Chooser.input0;
   ID_EX.immediateOut >> aluSrc2Chooser.input1;
@@ -558,6 +578,8 @@ void PipelinedProcessor::synchronizeSignals() {
   alu.output >> EX_MEM.aluOutputIn;
   ID_EX.readData2Out >> EX_MEM.readData2In;
 
+  ID_EX.pcOut >> EX_MEM.pcIn;
+
   // memory stage
   EX_MEM.aluOutputOut >> dataMemory.address;
   EX_MEM.readData2Out >> dataMemory.writeData;
@@ -571,6 +593,8 @@ void PipelinedProcessor::synchronizeSignals() {
   EX_MEM.ctrlMemToRegOut >> MEM_WB.buffer.ctrlMemToRegIn;
   EX_MEM.ctrlRegWriteOut >> MEM_WB.buffer.ctrlRegWriteIn;
 
+  EX_MEM.pcOut >> MEM_WB.buffer.pcIn;
+
   // write-back stage
   MEM_WB.out.aluOutputOut >> writeBackSrcChooser.input0;
   MEM_WB.out.readMemoryDataOut >> writeBackSrcChooser.input1;
@@ -578,14 +602,14 @@ void PipelinedProcessor::synchronizeSignals() {
 }
 
 std::ostream& operator<<(std::ostream& os, const InputSignal &input) {
-  os << "input signal [val = " << std::dec << input.val;
-  os << "(" << std::showbase << std::hex << input.val << std::dec << ")" << "]";
+  os << "input signal [val = " << std::dec << int32_t(input.val);
+  os << "(" << std::showbase << std::hex << int32_t(input.val) << std::dec << ")" << "]";
   return os;
 }
 
 std::ostream& operator<<(std::ostream& os, const OutputSignal &output) {
-  os << "output signal [val = " << std::dec << output.val;
-  os << "(" << std::showbase << std::hex << output.val << std::dec << ")";
+  os << "output signal [val = " << std::dec << int32_t(output.val);
+  os << "(" << std::showbase << std::hex << int32_t(output.val) << std::dec << ")";
   os << ", #sync-ed inputs = " << output.syncedInputs.size() << "]";
   return os;
 }
