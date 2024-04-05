@@ -7,6 +7,8 @@
 #include <string>
 #include <tuple>
 #include <optional>
+#include <algorithm>
+#include <cctype>
 
 namespace _Assembler {
   // treat S = SB and U = UJ for now
@@ -286,11 +288,12 @@ Word encodeInstruction(const std::string &line) {
   return _Assembler::encodeInstruction(_Assembler::parseInstruction(line));
 }
 
+// todo: move empty-line skipping functionality to encodeInstruction
 std::vector<Word> encodeInstructions(std::istream &is) {
   std::vector<Word> encoded;
   for (std::string line; std::getline(is, line); ) {
-    // skip empty lines
-    if (line == "") {
+    // skip empty lines and lines only containing whitespace
+    if (std::find_if_not(line.begin(), line.end(), isspace) == line.end()) {
       continue;
     }
     encoded.push_back(encodeInstruction(line));

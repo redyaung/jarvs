@@ -5,6 +5,7 @@
 #include <gmock/gmock.h>
 #include <gmock/gmock-cardinalities.h>
 #include <span>
+#include <sstream>
 #include "processor.hpp"
 #include "assembler.hpp"
 
@@ -28,6 +29,28 @@ namespace {
     }
   }
 
+  void registerEncodedInstructions(
+    PipelinedProcessor &processor, std::span<Word> instructions
+  ) {
+    for (auto i = 0; i < instructions.size(); ++i) {
+      processor.instructionMemory.memory.writeBlock(i * 4, Block<1>{instructions[i]});
+    }
+  }
+
+  // can accomodate loops
+  void executeInstructionsFixed(
+    PipelinedProcessor &processor,
+    int cycleCount,
+    bool debug = true
+  ) {
+    for (auto cycle = 0; cycle < cycleCount; cycle++) {
+      processor.executeOneCycle();
+      if (debug) {
+        std::cout << processor << std::endl;
+      }
+    }
+  }
+
   // note: cannot handle loops
   // skipCount: # instructions skipped due to jumps or conditional branches
   void executeInstructions(
@@ -38,12 +61,7 @@ namespace {
     bool debug = true
   ) {
     int cycleCount = 4 + instructionCount - skipCount + stallCount;
-    for (auto cycle = 0; cycle < cycleCount; cycle++) {
-      processor.executeOneCycle();
-      if (debug) {
-        std::cout << processor << std::endl;
-      }
-    }
+    executeInstructionsFixed(processor, cycleCount, debug);
   }
 
   TEST(IntegerRegisterFileTest, Initialization) {
@@ -813,5 +831,49 @@ namespace {
     EXPECT_EQ(processor.registers.intRegs.readRegister(10), 0);
     EXPECT_EQ(processor.registers.intRegs.readRegister(11), 0);
     EXPECT_EQ(processor.registers.intRegs.readRegister(12), 3);
+  }
+
+  // ref: used the terminal version of the simulator to manually run loop.asm
+  TEST(PipelinedProcessorIntegrationTest, SimpleLoop) {
+    PipelinedProcessor processor(true);
+    std::string instructionsStr(R"(
+      addi x10, x0, 1
+      sw x10, 0(x0)
+
+      addi x11, x0, 2
+      sw x11, 4(x0)
+
+      addi x12, x0, 3
+      sw x12, 8(x0)
+
+      add x21, x0, x0
+
+      add x10, x0, x0
+      addi x11, x0, 12
+
+      add x0, x0, x0
+      add x0, x0, x0
+
+      bge x10, x11, 20
+      lw x20, 0(x10)
+      add x21, x21, x20
+      addi x10, x10, 4
+      jal x0, -16
+
+      sw x21, 12(x0)
+    )");
+    std::stringstream stream(instructionsStr);
+    auto instructions = encodeInstructions(stream);
+    registerEncodedInstructions(processor, instructions);
+    executeInstructionsFixed(processor, 40, false);
+
+    EXPECT_EQ(processor.registers.intRegs.readRegister(10), 12);
+    EXPECT_EQ(processor.registers.intRegs.readRegister(11), 12);
+    EXPECT_EQ(processor.registers.intRegs.readRegister(20), 3);
+    EXPECT_EQ(processor.registers.intRegs.readRegister(21), 6);
+    EXPECT_EQ(processor.dataMemory.memory.readBlock<1>(0)[0], 1);
+    EXPECT_EQ(processor.dataMemory.memory.readBlock<1>(4)[0], 2);
+    EXPECT_EQ(processor.dataMemory.memory.readBlock<1>(8)[0], 3);
+    EXPECT_EQ(processor.dataMemory.memory.readBlock<1>(12)[0], 6);
   }
 }
