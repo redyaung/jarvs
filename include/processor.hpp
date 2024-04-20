@@ -135,6 +135,7 @@ struct ControlUnit : public OutOfSyncUnit {
   InputSignal instruction{this};
   InputSignal pc{this};
   InputSignal writeRegister{this};
+
   OutputSignal ctrlRegWrite;
   OutputSignal ctrlAluSrc;
   OutputSignal ctrlAluOp;
@@ -260,15 +261,19 @@ struct OrGate : public OutOfSyncUnit {
   void operate() override;
 };
 
-struct IFIDRegisters : public InSyncUnit {
+// a frozen pipeline register will not change its contents
+struct Freezable : virtual public InSyncUnit {
+  InputSignal shouldFreeze{this};
+};
+
+// a set of pipeline registers is flushed if it is set to reflect a nop
+struct Flushable : virtual public InSyncUnit {
+  InputSignal shouldFlush{this};
+};
+
+struct IFIDRegisters : public Freezable, public Flushable {
   InputSignal pcIn{this};
   InputSignal instructionIn{this};
-
-  // the ctrlShouldFlush function should technically come from the control unit but
-  // due to implementation details, we've directly forwarded the value from
-  // branchDecisionMaker instead -- it's still a control signal, hence the ctrl- prefix
-  InputSignal ctrlBranchShouldFlush{this};
-  bool ctrlShouldFlush = false;
 
   OutputSignal pcOut;
   OutputSignal instructionOut;
@@ -277,7 +282,7 @@ struct IFIDRegisters : public InSyncUnit {
 };
 
 // error-prone list of control signals (suggestion: is there a better way?)
-struct IDEXRegisters : public InSyncUnit {
+struct IDEXRegisters : public Freezable, public Flushable {
   InputSignal readData1In{this};
   InputSignal readData2In{this};
   InputSignal immediateIn{this};
@@ -315,7 +320,7 @@ struct IDEXRegisters : public InSyncUnit {
   void operate() override;
 };
 
-struct EXMEMRegisters : public InSyncUnit {
+struct EXMEMRegisters : public Freezable, public Flushable {
   InputSignal zeroIn{this};
   InputSignal aluOutputIn{this};
   InputSignal readData2In{this};
@@ -345,6 +350,9 @@ struct EXMEMRegisters : public InSyncUnit {
   void operate() override;
 };
 
+// this doesn't need to be flushable nor freezable, because the latest source of flushes
+// and stalls in the pipeline is in the MEM stage which is *before* the MEM/WB pipeline
+// registers
 struct MEMWBRegisters : public InSyncUnit {
   InputSignal readMemoryDataIn{this};
   InputSignal aluOutputIn{this};
@@ -369,12 +377,9 @@ struct MEMWBRegisters : public InSyncUnit {
   void operate() override;
 };
 
-struct InstructionIssueUnit : public InSyncUnit {
+struct InstructionIssueUnit : public Freezable {
   InputSignal pcIn{this};
   OutputSignal pcOut;
-
-  // used by the data hazard detection unit to signal a stall
-  bool shouldStall = false;
 
   void operate() override;
 };
@@ -414,11 +419,18 @@ struct ForwardingUnit : public InSyncUnit {
 
 // must be called before the forwarding unit
 struct DataHazardDetectionUnit : public InSyncUnit {
+  bool isForwarding;
+
+  // note: store these as pointers instead of references to allow default copy assignment
   BufferedInstructionIssueUnit *issueUnit;
   IFIDRegisters *IF_ID;
   IDEXRegisters *ID_EX;
   EXMEMRegisters *EX_MEM;
-  bool isForwarding;
+
+  OutputSignal shouldFreezeIssue;
+  OutputSignal shouldFreezeIF_ID, shouldFlushIF_ID;
+  OutputSignal shouldFreezeID_EX, shouldFlushID_EX;
+  OutputSignal shouldFreezeEX_MEM, shouldFlushEX_MEM;
 
   DataHazardDetectionUnit(
     bool isForwarding,
@@ -456,12 +468,15 @@ struct Processor {
 };
 
 struct PipelinedProcessor : public Processor {
+  // fetch (IF)
   Multiplexer pcChooser;
   BufferedInstructionIssueUnit issueUnit;
   ALUUnit pcAdder;    // todo: make this a dedicated adder
   InstructionMemoryUnit instructionMemory;
-
+  OrGate IF_ID_flushDecisionMaker;
   IFIDRegisters IF_ID;
+
+  // decode (ID)
   DecodeUnit decoder;
   RegisterFileUnit registers;
   ControlUnit control;
@@ -472,16 +487,19 @@ struct PipelinedProcessor : public Processor {
   BranchALUUnit branchDecisionAlu;
   AndGate condBranchDecisionMaker;
   OrGate branchDecisionMaker;
-
   IDEXRegisters ID_EX;
+
+  // execute (EX)
   Multiplexer aluSrc2Chooser;
   ALUUnit alu;
   ALUControl aluControl;
-
   EXMEMRegisters EX_MEM;
-  DataMemoryUnit dataMemory;
 
+  // memory (MEM)
+  DataMemoryUnit dataMemory;
   BufferedMEMWBRegisters MEM_WB;
+
+  // write-back (WB)
   Multiplexer writeBackSrcChooser;
 
   ForwardingUnit forwardingUnit;

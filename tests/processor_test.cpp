@@ -740,7 +740,8 @@ namespace {
     registerInstructions(processor, instructions);
     executeInstructions(processor, instructions.size(), 1, 1);
 
-    EXPECT_EQ(processor.registers.intRegs.readRegister(1), 8);
+    // earlier mistake: x1 should contain the next instruction after jal (0x0) which is 0x4
+    EXPECT_EQ(processor.registers.intRegs.readRegister(1), 4);
     EXPECT_EQ(processor.registers.intRegs.readRegister(10), 3);
   }
 
