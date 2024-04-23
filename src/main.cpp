@@ -28,6 +28,37 @@ Element render(RegisterFile<RegisterType::Integer> regFile) {
   return hflow(elements);
 }
 
+Element renderStages(const PipelinedProcessor &cpu) {
+  Elements allStages;
+  for (std::string stage : {"IF", "ID", "EX", "MEM", "WB"}) {
+    bool isFrozen = false;
+    bool isNop = false;
+    if (stage == "IF")  {
+      isFrozen = cpu.issueUnit.out.shouldFreeze.val;
+    } else if (stage == "ID") {
+      isFrozen = cpu.IF_ID.shouldFreeze.val;
+      isNop = cpu.IF_ID.shouldFlush.val || cpu.IF_ID.instructionOut.val == 0x0;
+    } else if (stage =="EX") {
+      isFrozen = cpu.ID_EX.shouldFreeze.val;
+      isNop = cpu.ID_EX.shouldFlush.val || cpu.ID_EX.instructionOut.val == 0x0;
+    } else if (stage == "MEM") {
+      isFrozen = cpu.EX_MEM.shouldFreeze.val;
+      isNop = cpu.EX_MEM.shouldFlush.val || cpu.EX_MEM.instructionOut.val == 0x0;
+    } else {
+      isNop = cpu.MEM_WB.out.shouldFlush.val || cpu.MEM_WB.out.instructionOut.val == 0x0;
+    }
+    Element textEl = text(" " + stage + " ");
+    if (isNop) {
+      textEl |= bold;
+    }
+    if (isFrozen) {
+      textEl |= underlined;
+    }
+    allStages.push_back(textEl);
+  }
+  return hflow(allStages);
+}
+
 Element renderInstructions(
   const PipelinedProcessor &cpu, 
   std::vector<std::string> readableInstructions
@@ -48,23 +79,28 @@ Element renderInstructions(
       (cpu.MEM_WB.out.pcOut.val == curPc) ? "WB" : " ";
 
     std::string stage;
+    bool isFrozen = false;
     bool isNop = false;
     if (cpu.clockCycle == 0) {    // for the case when clock cycle = 0
       stage = " ";
     } else if (cpu.issueUnit.out.pcOut.val == curPc) {
       stage = "IF";
+      isFrozen = cpu.issueUnit.out.shouldFreeze.val;
     } else if (cpu.IF_ID.pcOut.val == curPc) {
       stage = "ID";
-      isNop = cpu.IF_ID.instructionOut.val == 0x0;
+      isFrozen = cpu.IF_ID.shouldFreeze.val;
+      isNop = cpu.IF_ID.shouldFlush.val || cpu.IF_ID.instructionOut.val == 0x0;
     } else if (cpu.ID_EX.pcOut.val == curPc) {
       stage = "EX";
-      isNop = cpu.ID_EX.instructionOut.val == 0x0;
+      isFrozen = cpu.ID_EX.shouldFreeze.val;
+      isNop = cpu.ID_EX.shouldFlush.val || cpu.ID_EX.instructionOut.val == 0x0;
     } else if (cpu.EX_MEM.pcOut.val == curPc) {
       stage = "MEM";
-      isNop = cpu.EX_MEM.instructionOut.val == 0x0;
+      isFrozen = cpu.EX_MEM.shouldFreeze.val;
+      isNop = cpu.EX_MEM.shouldFlush.val || cpu.EX_MEM.instructionOut.val == 0x0;
     } else if (cpu.MEM_WB.out.pcOut.val == curPc) {
       stage = "WB";
-      isNop = cpu.MEM_WB.out.instructionOut.val == 0x0;
+      isNop = cpu.MEM_WB.out.shouldFlush.val || cpu.MEM_WB.out.instructionOut.val == 0x0;
     } else {
       stage = " ";
     }
@@ -72,6 +108,9 @@ Element renderInstructions(
     Element stageTxt = text(stage);
     if (isNop) {
       stageTxt |= bold;
+    }
+    if (isFrozen) {
+      stageTxt |= underlined;
     }
     curRow.push_back(stageTxt | size(WIDTH, EQUAL, 5) | center);
     tableEntries.push_back(curRow);
@@ -84,7 +123,7 @@ Element renderInstructions(
   return table.Render();
 }
 
-Element render(MainMemory<8> mainMem) {
+Element render(__MainMemoryUnit<8> mainMem) {
   auto fmtEntry = [](std::string content, int width = 5) {
     return hbox(
       text(" "),
@@ -144,14 +183,15 @@ int main(int argc, const char *argv[]) {
     readableInstructions.push_back(line);
   }
  
-  PipelinedProcessor cpu(useForwarding);
+  PipelinedProcessor cpu(useForwarding, 2);
+
+  // temporary (for testing __load_use.asm)
+  cpu.dataMemory.memory.writeBlock(0x0, Block<2>{1u, 2u});
 
   // register instructions into instruction memory
   for (auto i = 0; i < instructions.size(); ++i) {
     cpu.instructionMemory.memory.writeBlock(i * 4, Block<1>{instructions[i]});
   }
-
-  PipelinedProcessor initialCpu(cpu);     // used for reset
 
   std::string statsStr = "forwarding = "s + (useForwarding ? "on" : "off");
   std::string _resetPosition;
@@ -172,6 +212,10 @@ int main(int argc, const char *argv[]) {
           text("Memory (RAM)"),
           render(cpu.dataMemory.memory)
         ) | flex
+      ),
+      window(
+        text("Stages"),
+        renderStages(cpu)
       ),
       filler(),
       window(
@@ -196,7 +240,8 @@ int main(int argc, const char *argv[]) {
     if (_input == "") {   // enter
       cpu.executeOneCycle();
     } else if (_input == "r") {   // reset
-      cpu = initialCpu;
+      // todo: implement a reset() function on the processor
+      //  - avoid cpu = initialCpu technique as this requires a default copy assignment op
       continue;
     } else if (_input == "q") {    // quit
       break;

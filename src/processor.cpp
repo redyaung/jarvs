@@ -52,6 +52,12 @@ namespace __ProcessorUtils {
   constexpr inline uint32_t funct7(Word instruction) {
     return extractBits(instruction, 25, 31);
   }
+  constexpr inline uint32_t rs1(Word instruction) {
+    return extractBits(instruction, 15, 19);
+  }
+  constexpr inline uint32_t rs2(Word instruction) {
+    return extractBits(instruction, 20, 24);
+  }
 
   constexpr inline bool isNop(Word instruction) {
     return instruction == 0x0;
@@ -67,6 +73,11 @@ namespace __ProcessorUtils {
 
 using namespace __ProcessorUtils;
 
+void InputSignal::changeValue(Word newValue) {
+  val = newValue;
+  unit->notifyInputChange();
+}
+
 OutputSignal& OutputSignal::operator>>(InputSignal &signal) {
   syncedInputs.push_back(&signal);
   return *this;
@@ -75,9 +86,12 @@ OutputSignal& OutputSignal::operator>>(InputSignal &signal) {
 void OutputSignal::operator<<(Word newValue) {
   val = newValue;
   for (InputSignal *signal : syncedInputs) {
-    signal->val = newValue;
-    signal->unit->notifyInputChange();
+    signal->changeValue(newValue);
   }
+}
+
+Word Flushable::zeroOnFlush(Word val) const {
+  return shouldFlush.val ? Word(0u) : val;
 }
 
 void DecodeUnit::operate() {
@@ -282,6 +296,19 @@ void BranchALUUnit::operate() {
   }
 }
 
+__DataMemoryUnit::__DataMemoryUnit(size_t latency)
+  : memory{latency} {
+  _isRead >> _shouldOperate.input0;
+  _isWrite >> _shouldOperate.input1;
+  _shouldOperate.output >> memory.shouldOperate;
+}
+
+void __DataMemoryUnit::operate() {
+  _isRead << ctrlMemRead.val;
+  _isWrite << ctrlMemWrite.val;
+  memory.operate();
+}
+
 // won't read and write at the same time
 void DataMemoryUnit::operate() {
   if (ctrlMemRead.val) {
@@ -305,26 +332,24 @@ void OrGate::operate() {
   output << (input0.val || input1.val);
 }
 
+// note: it turns out zeroing out instructionIn.val directly on shouldFlush can lead to problems
+// if the output signal connected to instructionIn is not refreshed on the next turn!
+//
+// there are 2 ways to avoid this:
+//  i. propagate signals even if they are unchanged
+//  ii. don't directly set signal values
 void IFIDRegisters::operate() {
   if (shouldFreeze.val) {
     return;
   }
-  if (shouldFlush.val) {
-    instructionIn.val = 0;
-  }
 
-  instructionOut << instructionIn.val;
+  instructionOut << zeroOnFlush(instructionIn.val);
   pcOut << pcIn.val;
 }
 
 void IDEXRegisters::operate() {
   if (shouldFreeze.val) {
     return;
-  }
-  if (shouldFlush.val) {
-    ctrlMemWriteIn.val = 0;
-    ctrlMemReadIn.val = 0;
-    ctrlRegWriteIn.val = 0;
   }
 
   readData1Out << readData1In.val;
@@ -334,10 +359,10 @@ void IDEXRegisters::operate() {
 
   ctrlAluSrcOut << ctrlAluSrcIn.val;
   ctrlAluOpOut << ctrlAluOpIn.val;
-  ctrlMemWriteOut << ctrlMemWriteIn.val;
-  ctrlMemReadOut << ctrlMemReadIn.val;
+  ctrlMemWriteOut << zeroOnFlush(ctrlMemWriteIn.val);
+  ctrlMemReadOut << zeroOnFlush(ctrlMemReadIn.val);
   ctrlMemToRegOut << ctrlMemToRegIn.val;
-  ctrlRegWriteOut << ctrlRegWriteIn.val;
+  ctrlRegWriteOut << zeroOnFlush(ctrlRegWriteIn.val);
   writeRegisterOut << writeRegisterIn.val;
   readRegister1Out << readRegister1In.val;
   readRegister2Out << readRegister2In.val;
@@ -349,11 +374,6 @@ void EXMEMRegisters::operate() {
   if (shouldFreeze.val) {
     return;
   }
-  if (shouldFlush.val) {
-    ctrlMemWriteIn.val = 0;
-    ctrlMemReadIn.val = 0;
-    ctrlRegWriteIn.val = 0;
-  }
 
   ctrlMemWriteOut << 0;     // avoid unintentional writes
   ctrlMemReadOut << 0;      // avoid unintentional reads
@@ -362,10 +382,10 @@ void EXMEMRegisters::operate() {
   aluOutputOut << aluOutputIn.val;
   readData2Out << readData2In.val;
 
-  ctrlMemWriteOut << ctrlMemWriteIn.val;
-  ctrlMemReadOut << ctrlMemReadIn.val;
+  ctrlMemWriteOut << zeroOnFlush(ctrlMemWriteIn.val);
+  ctrlMemReadOut << zeroOnFlush(ctrlMemReadIn.val);
   ctrlMemToRegOut << ctrlMemToRegIn.val;
-  ctrlRegWriteOut << ctrlRegWriteIn.val;
+  ctrlRegWriteOut << zeroOnFlush(ctrlRegWriteIn.val);
   writeRegisterOut << writeRegisterIn.val;
 
   pcOut << pcIn.val;
@@ -381,7 +401,7 @@ void MEMWBRegisters::operate() {
   ctrlMemToRegOut << ctrlMemToRegIn.val;
   writeRegisterOut << writeRegisterIn.val;
   // only assert the write control signal after other signals are properly set
-  ctrlRegWriteOut << ctrlRegWriteIn.val;
+  ctrlRegWriteOut << zeroOnFlush(ctrlRegWriteIn.val);
 
   pcOut << pcIn.val;
   instructionOut << instructionIn.val;
@@ -444,29 +464,34 @@ void ForwardingUnit::operate() {
   }
 }
 
+void MemoryHazardDetectionUnit::operate() {
+  // if the data memory is still operating, freeze all pipeline registers incl. the issue
+  // unit up to EX-MEM and flush the MEM-WB pipeline registers
+  bool isBusy = !isDataMemoryReady.val;
+  shouldFreezeIssue << isBusy;
+  shouldFreezeIF_ID << isBusy;
+  shouldFreezeID_EX << isBusy;
+  shouldFreezeEX_MEM << isBusy;
+  shouldFlushMEM_WB << isBusy;
+}
+
 DataHazardDetectionUnit::DataHazardDetectionUnit(
   bool isForwarding,
   BufferedInstructionIssueUnit &issueUnit,
   IFIDRegisters &IF_ID,
   IDEXRegisters &ID_EX,
   EXMEMRegisters &EX_MEM
-) :
-  isForwarding{isForwarding}, issueUnit{&issueUnit}, IF_ID{&IF_ID}, ID_EX{&ID_EX},
+) : isForwarding{isForwarding}, issueUnit{&issueUnit}, IF_ID{&IF_ID}, ID_EX{&ID_EX},
   EX_MEM{&EX_MEM} {}
 
 void DataHazardDetectionUnit::operate() {
-  uint32_t rs1 = extractBits(IF_ID->instructionIn.val, 15, 19);
-  uint32_t rs2 = extractBits(IF_ID->instructionIn.val, 20, 24);
-  // stall the pipeline by one cycle by
-  //  1. deasserting MemWrite, RegWrite and Branch signals of instruction in IF
-  //      - we effectively achieve this by zeroing out the instruction itself
-  //  2. setting the PC to be equal to the latest instruction (in IF)
-  bool willStall = shouldStall(rs1, rs2);
-  shouldFlushIF_ID << willStall;
-  shouldFreezeIssue << willStall;
+  auto instruction = IF_ID->instructionIn.val;
+  bool shouldStall = hasDataHazard(rs1(instruction), rs2(instruction));
+  shouldFreezeIssue << shouldStall;
+  shouldFlushIF_ID << shouldStall;
 }
 
-bool DataHazardDetectionUnit::shouldStall(uint32_t rs1, uint32_t rs2) {
+bool DataHazardDetectionUnit::hasDataHazard(uint32_t rs1, uint32_t rs2) {
   // forwarding: only check for load-use data hazard
   if (isForwarding) {
     return (
@@ -487,8 +512,11 @@ bool DataHazardDetectionUnit::shouldStall(uint32_t rs1, uint32_t rs2) {
   );
 }
 
-PipelinedProcessor::PipelinedProcessor(bool useForwarding)
-  : forwardingUnit(ID_EX, EX_MEM, MEM_WB),
+PipelinedProcessor::PipelinedProcessor(
+  bool useForwarding,
+  size_t memoryLatency
+) : dataMemory(memoryLatency),
+    forwardingUnit(ID_EX, EX_MEM, MEM_WB),
     hazardDetectionUnit(useForwarding, issueUnit, IF_ID, ID_EX, EX_MEM),
     control(&registers.intRegs)
 {
@@ -499,18 +527,21 @@ PipelinedProcessor::PipelinedProcessor(bool useForwarding)
 // the order determines the order in which these in-sync units are called
 void PipelinedProcessor::registerUnits(bool useForwarding) {
   // priority unit should generally not be registered into syncedUnits like bufferedUnits
-  priorityUnits.push_back(&hazardDetectionUnit);
-  if (useForwarding) {
-    priorityUnits.push_back(&forwardingUnit);
-  }
 
   syncedUnits.push_back(&EX_MEM);
+  syncedUnits.push_back(&dataMemory);
   syncedUnits.push_back(&ID_EX);
   syncedUnits.push_back(&IF_ID);
 
   // buffered units should be called last (otherwise, no point in buffering)
   syncedUnits.push_back(&issueUnit);
   syncedUnits.push_back(&MEM_WB);
+
+  syncedUnits.push_back(&hazardDetectionUnit);
+  syncedUnits.push_back(&memHazardUnit);
+  if (useForwarding) {
+    syncedUnits.push_back(&forwardingUnit);
+  }
 
   bufferedUnits.push_back(&MEM_WB);
   bufferedUnits.push_back(&issueUnit);
@@ -522,8 +553,11 @@ void PipelinedProcessor::synchronizeSignals() {
   branchAddrAlu.output >> pcChooser.input1;
   branchDecisionMaker.output >> pcChooser.control;
 
+  memHazardUnit.shouldFreezeIssue >> issueUnitFreezeDecisionMaker.input0;
+  hazardDetectionUnit.shouldFreezeIssue >> issueUnitFreezeDecisionMaker.input1;
+
   pcChooser.output >> issueUnit.buffer.pcIn;
-  hazardDetectionUnit.shouldFreezeIssue >> issueUnit.buffer.shouldFreeze;
+  issueUnitFreezeDecisionMaker.output >> issueUnit.buffer.shouldFreeze;
 
   issueUnit.out.pcOut >> pcAdder.input0;
   pcAdder.input1.val = 4u;    // hardcoded
@@ -536,7 +570,7 @@ void PipelinedProcessor::synchronizeSignals() {
   issueUnit.out.pcOut >> IF_ID.pcIn;
   instructionMemory.instruction >> IF_ID.instructionIn;
   IF_ID_flushDecisionMaker.output >> IF_ID.shouldFlush;
-  hazardDetectionUnit.shouldFreezeIF_ID >> IF_ID.shouldFreeze;
+  memHazardUnit.shouldFreezeIF_ID >> IF_ID.shouldFreeze;
 
   // decode stage
   IF_ID.instructionOut >> decoder.instruction;
@@ -590,8 +624,7 @@ void PipelinedProcessor::synchronizeSignals() {
 
   IF_ID.pcOut >> ID_EX.pcIn;
 
-  hazardDetectionUnit.shouldFreezeID_EX >> ID_EX.shouldFreeze;
-  hazardDetectionUnit.shouldFlushID_EX >> ID_EX.shouldFlush;
+  memHazardUnit.shouldFreezeID_EX >> ID_EX.shouldFreeze;
 
   // execute stage
   ID_EX.readData2Out >> aluSrc2Chooser.input0;
@@ -618,8 +651,7 @@ void PipelinedProcessor::synchronizeSignals() {
   ID_EX.pcOut >> EX_MEM.pcIn;
   ID_EX.instructionOut >> EX_MEM.instructionIn;
 
-  hazardDetectionUnit.shouldFreezeEX_MEM >> EX_MEM.shouldFreeze;
-  hazardDetectionUnit.shouldFlushEX_MEM >> EX_MEM.shouldFlush;
+  memHazardUnit.shouldFreezeEX_MEM >> EX_MEM.shouldFreeze;
 
   // memory stage
   EX_MEM.aluOutputOut >> dataMemory.address;
@@ -636,23 +668,28 @@ void PipelinedProcessor::synchronizeSignals() {
 
   EX_MEM.pcOut >> MEM_WB.buffer.pcIn;
   EX_MEM.instructionOut >> MEM_WB.buffer.instructionIn;
+  memHazardUnit.shouldFlushMEM_WB >> MEM_WB.buffer.shouldFlush;
 
   // write-back stage
   MEM_WB.out.aluOutputOut >> writeBackSrcChooser.input0;
   MEM_WB.out.readMemoryDataOut >> writeBackSrcChooser.input1;
   MEM_WB.out.ctrlMemToRegOut >> writeBackSrcChooser.control;
+
+  // miscellaneous units
+  dataMemory.isReady >> memHazardUnit.isDataMemoryReady;
 }
 
 std::ostream& operator<<(std::ostream& os, const InputSignal &input) {
-  os << "input signal [val = " << std::dec << int32_t(input.val);
-  os << "(" << std::showbase << std::hex << int32_t(input.val) << std::dec << ")" << "]";
+  os << std::dec << int32_t(input.val) << " ";
+  os << "(" << std::showbase << std::hex << int32_t(input.val) << std::dec << ")";
+  os << " [in]";
   return os;
 }
 
 std::ostream& operator<<(std::ostream& os, const OutputSignal &output) {
-  os << "output signal [val = " << std::dec << int32_t(output.val);
+  os << std::dec << int32_t(output.val) << " ";
   os << "(" << std::showbase << std::hex << int32_t(output.val) << std::dec << ")";
-  os << ", #sync-ed inputs = " << output.syncedInputs.size() << "]";
+  os << " [out]";
   return os;
 }
 
@@ -744,6 +781,16 @@ std::ostream& operator<<(std::ostream& os, const BranchALUUnit &branchAlu) {
   return os;
 }
 
+std::ostream& operator<<(std::ostream& os, const __DataMemoryUnit &dataMemory) {
+  os << "in __DataMemoryUnit: " << std::endl;
+  os << "\t" << "address: " << dataMemory.address << std::endl;
+  os << "\t" << "writeData: " << dataMemory.writeData << std::endl;
+  os << "\t" << "ctrlMemRead: " << dataMemory.ctrlMemRead << std::endl;
+  os << "\t" << "ctrlMemWrite: " << dataMemory.ctrlMemWrite << std::endl;
+  os << "\t" << "readData: " << dataMemory.readData;
+  return os;
+}
+
 std::ostream& operator<<(std::ostream& os, const DataMemoryUnit &dataMemory) {
   os << "in DataMemoryUnit: " << std::endl;
   os << "\t" << "address: " << dataMemory.address << std::endl;
@@ -782,7 +829,7 @@ std::ostream& operator<<(std::ostream& os, const IFIDRegisters &IF_ID) {
   os << "\t" << "shouldFreeze: " << IF_ID.shouldFreeze << std::endl;
   os << "\t" << "shouldFlush: " << IF_ID.shouldFlush << std::endl;
   os << "\t" << "pcOut: " << IF_ID.pcOut << std::endl;
-  os << "\t" << "instructionOut: " << IF_ID.instructionOut << std::endl;
+  os << "\t" << "instructionOut: " << IF_ID.instructionOut;
   return os;
 }
 
@@ -833,7 +880,7 @@ std::ostream& operator<<(std::ostream& os, const MEMWBRegisters &MEM_WB) {
 std::ostream& operator<<(std::ostream& os, const InstructionIssueUnit &issueUnit) {
   os << "in InstructionIssueUnit: " << std::endl;
   os << "\t" << "shouldFreeze: " << issueUnit.shouldFreeze << std::endl;
-  os << "\t" << "pcOut: " << issueUnit.pcOut << std::endl;
+  os << "\t" << "pcOut: " << issueUnit.pcOut;
   return os;
 }
 
@@ -851,16 +898,40 @@ std::ostream& operator<<(std::ostream& os, const BufferedInstructionIssueUnit &i
   return os;
 }
 
+std::ostream& operator<<(std::ostream& os, const DataHazardDetectionUnit &hazardUnit) {
+  os << "in DataHazardDetectionUnit: " << std::endl;
+  os << "\t" << "shouldFlushIF_ID: " << hazardUnit.shouldFlushIF_ID << std::endl;
+  os << "\t" << "shouldFreezeIssue: " << hazardUnit.shouldFreezeIssue;
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const MemoryHazardDetectionUnit &hazardUnit) {
+  os << "in MemoryHazardDetectionUnit: " << std::endl;
+  os << "\t" << "shouldFreezeIssue: " << hazardUnit.shouldFreezeIssue << std::endl;
+  os << "\t" << "shouldFreezeIF_ID: " << hazardUnit.shouldFreezeIF_ID << std::endl;
+  os << "\t" << "shouldFreezeID_EX: " << hazardUnit.shouldFreezeID_EX << std::endl;
+  os << "\t" << "shouldFreezeEX_MEM: " << hazardUnit.shouldFreezeEX_MEM << std::endl;
+  os << "\t" << "shouldFlushMEM_WB: " << hazardUnit.shouldFlushMEM_WB;
+  return os;
+}
+
 std::ostream& operator<<(std::ostream& os, const PipelinedProcessor &processor) {
   os << "pipelined processor" << std::endl;
   os << "\t" << "clock cycle = " << processor.clockCycle << std::endl;
+  os << std::string(32, '-') << std::endl;
+
+  os << "dataHazardDetectionUnit: " << processor.hazardDetectionUnit << std::endl;
+  os << "memHazardDetectionUnit: " << processor.memHazardUnit << std::endl;
+  os << std::string(32, '-') << std::endl;
 
   os << "pcChooser: " << processor.pcChooser << std::endl;
+  os << "issueUnitFreezeDecisionMaker: " << processor.issueUnitFreezeDecisionMaker << std::endl;
   os << "issueUnit: " << processor.issueUnit << std::endl;
   os << "pcAdder: " << processor.pcAdder << std::endl;
   os << "instructionMemory: " << processor.instructionMemory << std::endl;
   os << "IF_ID_flushDecisionMaker: " << processor.IF_ID_flushDecisionMaker << std::endl;
   os << "IF_ID: " << processor.IF_ID << std::endl;
+  os << std::string(32, '-') << std::endl;
 
   os << "decoder: " << processor.decoder << std::endl;
   os << "control: " << processor.control << std::endl;
@@ -873,16 +944,21 @@ std::ostream& operator<<(std::ostream& os, const PipelinedProcessor &processor) 
   os << "condBranchDecisionMaker: " << processor.condBranchDecisionMaker << std::endl;
   os << "branchDecisionMaker: " << processor.branchDecisionMaker << std::endl;
   os << "ID_EX: " << processor.ID_EX << std::endl;
+  os << std::string(32, '-') << std::endl;
 
   os << "aluSrc2Chooser: " << processor.aluSrc2Chooser << std::endl;
   os << "alu: " << processor.alu << std::endl;
   os << "aluControl: " << processor.aluControl << std::endl;
   os << "EX_MEM: " << processor.EX_MEM << std::endl;
+  os << std::string(32, '-') << std::endl;
 
   os << "dataMemory: " << processor.dataMemory << std::endl;
   os << "MEM_WB: " << processor.MEM_WB << std::endl;
+  os << std::string(32, '-') << std::endl;
 
-  os << "writeBackSrcChooser: " << processor.writeBackSrcChooser;
+  os << "writeBackSrcChooser: " << processor.writeBackSrcChooser << std::endl;
+
+  os << std::string(32, '=') << std::endl;
 
   return os;
 }

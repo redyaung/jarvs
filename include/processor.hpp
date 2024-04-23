@@ -56,6 +56,7 @@ struct InputSignal {
   Unit *unit;
 
   explicit InputSignal(Unit *unit) : unit{unit} {}
+  void changeValue(Word newValue);
 };
 
 // can be synchronized to a number of InputSignals
@@ -101,6 +102,34 @@ struct InSyncUnit : public Unit {
 //      ii. [bar] >> .buffer ([...] >> out is internal)
 struct BufferedInSyncUnit : public InSyncUnit {
   virtual void bufferInputs() = 0;
+};
+
+// a frozen pipeline register will not change its contents
+struct Freezable : virtual public InSyncUnit {
+  InputSignal shouldFreeze{this};
+};
+
+// a set of pipeline registers is flushed if it is set to reflect a nop
+struct Flushable : virtual public InSyncUnit {
+  InputSignal shouldFlush{this};
+
+  Word zeroOnFlush(Word val) const;
+};
+
+struct AndGate : public OutOfSyncUnit {
+  InputSignal input0{this};
+  InputSignal input1{this};
+  OutputSignal output;
+
+  void operate() override;
+};
+
+struct OrGate : public OutOfSyncUnit {
+  InputSignal input0{this};
+  InputSignal input1{this};
+  OutputSignal output;
+
+  void operate() override;
 };
 
 struct DecodeUnit : public OutOfSyncUnit {
@@ -220,6 +249,95 @@ struct BranchALUUnit : public OutOfSyncUnit {
   void operate() override;
 };
 
+template<size_t AddressSpace>
+struct __MainMemoryUnit : public InSyncUnit {
+  InputSignal isRead{this};
+  InputSignal shouldOperate{this};
+  InputSignal address{this};
+  InputSignal writeData{this};
+
+  OutputSignal readData;
+  OutputSignal isReady;
+
+  size_t latency;     // how many cycles it takes to complete an access
+
+  std::byte bytes[1<< AddressSpace];
+  int elapsedCycleCount = 0;
+
+  __MainMemoryUnit(size_t latency = 1)
+    : latency{latency} {
+    std::fill(bytes, bytes + (1<< AddressSpace), std::byte{0});
+  }
+
+  inline bool isBusy() const {
+    return elapsedCycleCount > 0;
+  }
+
+  void operate() override {
+    // invariant: should not be busy when it's not asked to operate
+    assert(!isBusy() || shouldOperate.val);
+    if (!shouldOperate.val) {
+      isReady << true;
+      return;
+    }
+    bool hasCompleted = (elapsedCycleCount + 1 >= latency);
+    if (!hasCompleted) {
+      isReady << false;
+      elapsedCycleCount++;
+      return;
+    }
+    if (isRead.val) {   // read
+      readData << readBlock<1>(address.val)[0];
+    } else {            // write
+      writeBlock(address.val, Block<1>{writeData.val});
+    }
+    isReady << true;
+    elapsedCycleCount = 0;
+  }
+
+  template<uint32_t W>
+  Block<W> readBlock(uint32_t addr) {
+    if (!isAligned(addr, W)) {
+      throw std::invalid_argument("address " + std::to_string(addr) + " is not word-aligned");
+    } else if (addr + nbytes(W) > (1<< AddressSpace)) {
+      throw std::out_of_range("end address is out of address space");
+    }
+    Block<W> block;
+    std::copy(bytes + addr, bytes + addr + nbytes(W), block.bytes);
+    return block;
+  }
+
+  template<uint32_t W>
+  void writeBlock(uint32_t addr, Block<W> block) {
+    if (!isAligned(addr, W)) {
+      throw std::invalid_argument("address " + std::to_string(addr) + " is not word-aligned");
+    } else if (addr + nbytes(W) > (1<< AddressSpace)) {
+      throw std::out_of_range("end address is out of address space");
+    }
+    std::copy(block.bytes, block.bytes + nbytes(W), bytes + addr);
+  }
+};
+
+struct __DataMemoryUnit : public InSyncUnit {
+  __MainMemoryUnit<8> memory;
+
+  InputSignal &ctrlMemRead = memory.isRead;
+  InputSignal &address = memory.address;
+  InputSignal &writeData = memory.writeData;
+
+  InputSignal ctrlMemWrite{this};
+
+  OutputSignal &readData = memory.readData;
+  OutputSignal &isReady = memory.isReady;
+
+  OutputSignal _isRead;
+  OutputSignal _isWrite;
+  OrGate _shouldOperate;
+
+  __DataMemoryUnit(size_t latency);
+  void operate() override;
+};
+
 // we will most likely need output signal(s) that asserts when the memory unit has
 // finished its write or read operation
 // for now, only use main memory with an 8-bit address space
@@ -243,32 +361,6 @@ struct InstructionMemoryUnit : public OutOfSyncUnit {
   MainMemory<8> memory; 
 
   void operate() override;
-};
-
-struct AndGate : public OutOfSyncUnit {
-  InputSignal input0{this};
-  InputSignal input1{this};
-  OutputSignal output;
-
-  void operate() override;
-};
-
-struct OrGate : public OutOfSyncUnit {
-  InputSignal input0{this};
-  InputSignal input1{this};
-  OutputSignal output;
-
-  void operate() override;
-};
-
-// a frozen pipeline register will not change its contents
-struct Freezable : virtual public InSyncUnit {
-  InputSignal shouldFreeze{this};
-};
-
-// a set of pipeline registers is flushed if it is set to reflect a nop
-struct Flushable : virtual public InSyncUnit {
-  InputSignal shouldFlush{this};
 };
 
 struct IFIDRegisters : public Freezable, public Flushable {
@@ -353,7 +445,7 @@ struct EXMEMRegisters : public Freezable, public Flushable {
 // this doesn't need to be flushable nor freezable, because the latest source of flushes
 // and stalls in the pipeline is in the MEM stage which is *before* the MEM/WB pipeline
 // registers
-struct MEMWBRegisters : public InSyncUnit {
+struct MEMWBRegisters : public Flushable {
   InputSignal readMemoryDataIn{this};
   InputSignal aluOutputIn{this};
 
@@ -388,10 +480,20 @@ struct InstructionIssueUnit : public Freezable {
 //  - the parent class cannot synchronize the signals between the buffer and output
 //    units, so this must be done in the c-tor of the subclass
 template<std::derived_from<InSyncUnit> U>
-struct ConcreteBufferedUnit : BufferedInSyncUnit {
+struct ConcreteBufferedUnit : public BufferedInSyncUnit {
   U buffer, out;
 
-  void bufferInputs() override { buffer.operate(); }
+  // propagate shouldFreeze and shouldFlush explicitly
+  void bufferInputs() override { 
+    if constexpr (std::derived_from<U, Freezable>) {
+      out.shouldFreeze.val = buffer.shouldFreeze.val;
+    }
+    if constexpr (std::derived_from<U, Flushable>) {
+      out.shouldFlush.val = buffer.shouldFlush.val;
+    }
+    buffer.operate();
+  }
+
   void operate() override { out.operate(); }
 };
 
@@ -401,6 +503,7 @@ struct BufferedMEMWBRegisters : public ConcreteBufferedUnit<MEMWBRegisters> {
 
 struct BufferedInstructionIssueUnit : public ConcreteBufferedUnit<InstructionIssueUnit> {
   BufferedInstructionIssueUnit();
+
 };
 
 struct ForwardingUnit : public InSyncUnit {
@@ -417,20 +520,38 @@ struct ForwardingUnit : public InSyncUnit {
   void operate() override;
 };
 
+// todo (urgent): need a separate OutOfSync MemoryHazardDetection unit
+//  - currently, tests are failing after propagating shouldFreeze and shouldFlush
+//  from buffer to out (which should not)
+//  - this division is needed because DataHazardDetectionUnit runs before any
+//  other unit and cannot take action immediately when MemoryUnit has finished
+//  running. it would only take action in the next cycle which is not what we
+//  want
+
+struct MemoryHazardDetectionUnit : public InSyncUnit {
+  InputSignal isDataMemoryReady{this};
+
+  OutputSignal shouldFreezeIssue;   // in common w/ DataHazardDetectionUnit
+  OutputSignal shouldFreezeIF_ID;
+  OutputSignal shouldFreezeID_EX;
+  OutputSignal shouldFreezeEX_MEM;
+  OutputSignal shouldFlushMEM_WB;
+
+  void operate() override;
+};
+
 // must be called before the forwarding unit
 struct DataHazardDetectionUnit : public InSyncUnit {
   bool isForwarding;
 
-  // note: store these as pointers instead of references to allow default copy assignment
+  // need these pointers to determine whether there is a data hazard
   BufferedInstructionIssueUnit *issueUnit;
   IFIDRegisters *IF_ID;
   IDEXRegisters *ID_EX;
   EXMEMRegisters *EX_MEM;
 
-  OutputSignal shouldFreezeIssue;
-  OutputSignal shouldFreezeIF_ID, shouldFlushIF_ID;
-  OutputSignal shouldFreezeID_EX, shouldFlushID_EX;
-  OutputSignal shouldFreezeEX_MEM, shouldFlushEX_MEM;
+  OutputSignal shouldFreezeIssue;   // in common w/ MemoryHazardDetectionUnit
+  OutputSignal shouldFlushIF_ID;
 
   DataHazardDetectionUnit(
     bool isForwarding,
@@ -440,7 +561,7 @@ struct DataHazardDetectionUnit : public InSyncUnit {
     EXMEMRegisters &EX_MEM
   );
   void operate() override;
-  bool shouldStall(uint32_t rs1, uint32_t rs2);
+  bool hasDataHazard(uint32_t rs1, uint32_t rs2);
 };
 
 // the processor is responsible for registering the appropriate synchronized units,
@@ -470,6 +591,7 @@ struct Processor {
 struct PipelinedProcessor : public Processor {
   // fetch (IF)
   Multiplexer pcChooser;
+  OrGate issueUnitFreezeDecisionMaker;
   BufferedInstructionIssueUnit issueUnit;
   ALUUnit pcAdder;    // todo: make this a dedicated adder
   InstructionMemoryUnit instructionMemory;
@@ -496,16 +618,18 @@ struct PipelinedProcessor : public Processor {
   EXMEMRegisters EX_MEM;
 
   // memory (MEM)
-  DataMemoryUnit dataMemory;
+  __DataMemoryUnit dataMemory;
   BufferedMEMWBRegisters MEM_WB;
 
   // write-back (WB)
   Multiplexer writeBackSrcChooser;
 
+  // miscellaneous units
   ForwardingUnit forwardingUnit;
   DataHazardDetectionUnit hazardDetectionUnit;
+  MemoryHazardDetectionUnit memHazardUnit;
 
-  PipelinedProcessor(bool useForwarding = false);
+  PipelinedProcessor(bool useForwarding = false, size_t memoryLatency = 1);
   // registers both in-sync units and buffered in-sync units
   void registerUnits(bool useForwarding);   // should only be called ONCE by constructor
   void synchronizeSignals();    // should also be called ONCE by constructor

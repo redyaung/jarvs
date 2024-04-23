@@ -658,6 +658,22 @@ namespace {
     EXPECT_EQ(processor.registers.intRegs.readRegister(2), 48);
   }
 
+  TEST(PipelinedProcessorTest, HandleLoadUseHazard2) {
+    PipelinedProcessor processor(true);
+
+    processor.dataMemory.memory.writeBlock(0x0, Block<1>{24});
+    std::vector<std::string> instructions {
+      "lw x1, 0(x0)",
+      "add x2, x1, x1",
+      "add x2, x2, x2"
+    };
+    registerInstructions(processor, instructions);
+    executeInstructions(processor, instructions.size(), 0, 1);
+
+    EXPECT_EQ(processor.registers.intRegs.readRegister(1), 24);
+    EXPECT_EQ(processor.registers.intRegs.readRegister(2), 96);
+  }
+
   TEST(PipelinedProcessorTest, HazardDetectionNoFwdLoadAdd) {
     PipelinedProcessor processor;
 
@@ -876,5 +892,59 @@ namespace {
     EXPECT_EQ(processor.dataMemory.memory.readBlock<1>(4)[0], 2);
     EXPECT_EQ(processor.dataMemory.memory.readBlock<1>(8)[0], 3);
     EXPECT_EQ(processor.dataMemory.memory.readBlock<1>(12)[0], 6);
+  }
+
+  TEST(MemoryTimingTest, Latency2Cycles) {
+    PipelinedProcessor processor(true, 2);
+
+    processor.dataMemory.memory.writeBlock(0x0, Block<2>{1u, 2u});
+    std::string instructionsStr(R"(
+      lw x1, 0(x0)
+      lw x2, 4(x0)
+      add x3, x1, x2
+    )");
+    std::stringstream stream(instructionsStr);
+    auto instructions = encodeInstructions(stream);
+    registerEncodedInstructions(processor, instructions);
+
+    // MEM takes 2 cycles, so at clock cycle 6 (5 + 1), x1 = 1
+    executeInstructionsFixed(processor, 6);
+    EXPECT_EQ(processor.registers.intRegs.readRegister(1), 1);
+
+    // for 2nd lw: 6 = MEM, 7 = MEM, 8 = WB -> x2 = 2
+    executeInstructionsFixed(processor, 2);
+    EXPECT_EQ(processor.registers.intRegs.readRegister(2), 2);
+
+    // for add, 8 = EX, 9 = MEM, 10 = WB -> x3 = 1 + 2 = 3
+    executeInstructionsFixed(processor, 2);
+    EXPECT_EQ(processor.registers.intRegs.readRegister(3), 3);
+  }
+
+  // without forwarding, a load-use data hazard needs 2 nops, but due to memory latency being 2,
+  // this nop is reduced to 1, so the entire execution takes 1 additional cycle, thus a total
+  // 11 cycles
+  TEST(MemoryTimingTest, Latency2CyclesNoFwd) {
+    PipelinedProcessor processor(false, 2);
+
+    processor.dataMemory.memory.writeBlock(0x0, Block<2>{1u, 2u});
+    std::string instructionsStr(R"(
+      lw x1, 0(x0)
+      lw x2, 4(x0)
+      add x3, x1, x2
+    )");
+    std::stringstream stream(instructionsStr);
+    auto instructions = encodeInstructions(stream);
+    registerEncodedInstructions(processor, instructions);
+
+    executeInstructionsFixed(processor, 6);
+    EXPECT_EQ(processor.registers.intRegs.readRegister(1), 1);
+
+    // for 2nd lw: 6 = MEM, 7 = MEM, 8 = WB -> x2 = 2
+    executeInstructionsFixed(processor, 2);
+    EXPECT_EQ(processor.registers.intRegs.readRegister(2), 2);
+
+    // for add, 8 = ID, 9 = EX, 10 = MEM, 11 = WB -> x3 = 1 + 2 = 3
+    executeInstructionsFixed(processor, 3);
+    EXPECT_EQ(processor.registers.intRegs.readRegister(3), 3);
   }
 }
