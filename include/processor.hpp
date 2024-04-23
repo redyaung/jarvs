@@ -10,6 +10,7 @@
 #include <vector>
 #include <ostream>
 #include <concepts>
+#include <optional>
 
 constexpr int registerCount = 32;
 
@@ -47,33 +48,64 @@ struct RegisterFile {
   }
 };
 
-struct Unit;
-
-// out-in synchronization: outputSignal >> inputSignal >> ...
-// only allow changes to occur through synced output signals
-struct InputSignal {
-  Word val;
-  Unit *unit;
-
-  explicit InputSignal(Unit *unit) : unit{unit} {}
-  void changeValue(Word newValue);
-};
-
-// can be synchronized to a number of InputSignals
-// receiving a new value: outputSignal << newValue
-struct OutputSignal {
-  Word val;
-  std::vector<InputSignal*> syncedInputs;
-
-  // assumes that each InputSignal is synced only ONCE with a particular OutputSignal
-  OutputSignal& operator>>(InputSignal &signal);
-  void operator<<(Word newValue);
-};
-
 struct Unit {
   virtual void notifyInputChange() = 0;
   // performs its functions according to input signals
   virtual void operate() = 0;
+};
+
+template<size_t W>
+struct WideInputSignal {
+  Block<W> val;
+  Unit *unit;
+
+  explicit WideInputSignal(Unit *unit) : unit{unit} {}
+  void changeValue(const Block<W> &newVal) {
+    val = newVal;
+    unit->notifyInputChange();
+  }
+  const Block<W> &operator*() const { return val; }
+  Block<W> &operator*() { return val; }
+};
+
+template<size_t W>
+struct WideOutputSignal {
+  Block<W> val;
+  std::vector<WideInputSignal<W>*> syncedInputs;
+
+  WideOutputSignal<W>& operator>>(WideInputSignal<W> &signal) {
+    syncedInputs.push_back(&signal);
+    return *this;
+  }
+  void operator<<(const Block<W> &newVal) {
+    val = newVal;
+    for (WideInputSignal<W> *inSignal : syncedInputs) {
+      inSignal->changeValue(newVal);
+    }
+  }
+  const Block<W> &operator*() const { return val; }
+  Block<W> &operator*() { return val; }
+};
+
+// out-in synchronization: outputSignal >> inputSignal >> ...
+// only allow changes to occur through synced output signals
+struct InputSignal : WideInputSignal<1> {
+  using WideInputSignal<1>::WideInputSignal;
+
+  Word operator*() const { return val[0]; }
+  Word& operator*() { return val[0]; }
+};
+
+// can be synchronized to a number of InputSignals
+// receiving a new value: outputSignal << newValue
+struct OutputSignal : WideOutputSignal<1> {
+  using WideOutputSignal<1>::WideOutputSignal;
+
+  void operator<<(Word newVal) {
+    WideOutputSignal<1>::operator<<(Block<1>({newVal}));
+  }
+  Word operator*() const { return val[0]; }
+  Word& operator*() { return val[0]; }
 };
 
 // out-of-sync units immediately propagate input changes to its outputs
@@ -249,90 +281,124 @@ struct BranchALUUnit : public OutOfSyncUnit {
   void operate() override;
 };
 
-template<size_t AddressSpace>
+// W: number of words in each block
+template<size_t AddressSpace, uint32_t W>
 struct __MainMemoryUnit : public InSyncUnit {
   InputSignal isRead{this};
   InputSignal shouldOperate{this};
   InputSignal address{this};
-  InputSignal writeData{this};
+  WideInputSignal<W> writeData{this};
 
-  OutputSignal readData;
+  WideOutputSignal<W> readData;
   OutputSignal isReady;
 
-  size_t latency;     // how many cycles it takes to complete an access
+  const size_t latency;     // how many cycles it takes to complete an access
+
+  bool isCurrentlyReading = false;
+  int cyclesOperated = 0;
 
   std::byte bytes[1<< AddressSpace];
-  int elapsedCycleCount = 0;
 
-  __MainMemoryUnit(size_t latency = 1)
-    : latency{latency} {
+  __MainMemoryUnit(size_t latency = 1) : latency{latency} {
     std::fill(bytes, bytes + (1<< AddressSpace), std::byte{0});
   }
 
-  inline bool isBusy() const {
-    return elapsedCycleCount > 0;
+  inline bool isOperating() const {
+    return cyclesOperated > 0;
+  }
+
+  // invariant: whenever the memory unit is operating, the current request should be
+  // consistent with the request made previously, i.e., if we requested a read()
+  // in the last cycle, the current request must also be a read()
+  bool checkInvariant() const {
+    if (!isOperating()) {
+      return true;
+    }
+    return *shouldOperate && isCurrentlyReading == *isRead;
+  }
+
+  // assumes invariant has been met
+  bool willCompleteOperation() const {
+    return cyclesOperated + 1 >= latency;
   }
 
   void operate() override {
-    // invariant: should not be busy when it's not asked to operate
-    assert(!isBusy() || shouldOperate.val);
-    if (!shouldOperate.val) {
+    assert(checkInvariant());
+    if (!*shouldOperate) {
       isReady << true;
       return;
     }
-    bool hasCompleted = (elapsedCycleCount + 1 >= latency);
-    if (!hasCompleted) {
+    isCurrentlyReading = *isRead;
+    if (!willCompleteOperation()) {
       isReady << false;
-      elapsedCycleCount++;
+      cyclesOperated++;
       return;
     }
-    if (isRead.val) {   // read
-      readData << readBlock<1>(address.val)[0];
+    if (*isRead) {   // read
+      readData << readBlock<W>(*address);
     } else {            // write
-      writeBlock(address.val, Block<1>{writeData.val});
+      writeBlock(*address, *writeData);
     }
     isReady << true;
-    elapsedCycleCount = 0;
+    cyclesOperated = 0;
   }
 
-  template<uint32_t W>
-  Block<W> readBlock(uint32_t addr) {
-    if (!isAligned(addr, W)) {
+  template<uint32_t _W>
+  Block<_W> readBlock(uint32_t addr) {
+    if (!isAligned(addr, _W)) {
       throw std::invalid_argument("address " + std::to_string(addr) + " is not word-aligned");
-    } else if (addr + nbytes(W) > (1<< AddressSpace)) {
+    } else if (addr + nbytes(_W) > (1<< AddressSpace)) {
       throw std::out_of_range("end address is out of address space");
     }
-    Block<W> block;
-    std::copy(bytes + addr, bytes + addr + nbytes(W), block.bytes);
+    Block<_W> block;
+    std::copy(bytes + addr, bytes + addr + nbytes(_W), block.bytes);
     return block;
   }
 
-  template<uint32_t W>
-  void writeBlock(uint32_t addr, Block<W> block) {
-    if (!isAligned(addr, W)) {
+  template<uint32_t _W>
+  void writeBlock(uint32_t addr, Block<_W> block) {
+    if (!isAligned(addr, _W)) {
       throw std::invalid_argument("address " + std::to_string(addr) + " is not word-aligned");
-    } else if (addr + nbytes(W) > (1<< AddressSpace)) {
+    } else if (addr + nbytes(_W) > (1<< AddressSpace)) {
       throw std::out_of_range("end address is out of address space");
     }
-    std::copy(block.bytes, block.bytes + nbytes(W), bytes + addr);
+    std::copy(block.bytes, block.bytes + nbytes(_W), bytes + addr);
   }
 };
 
+// widens an InputSignal to a WideOutputSignal<1>
+struct SignalWideningUnit : public OutOfSyncUnit {
+  InputSignal in{this};
+  WideOutputSignal<1> out;
+
+  void operate() override;
+};
+
+// shortens a WideInputSignal<1> to an OutputSignal
+struct SignalShorteningUnit : public OutOfSyncUnit {
+  WideInputSignal<1> in{this};
+  OutputSignal out;
+
+  void operate() override;
+};
+
 struct __DataMemoryUnit : public InSyncUnit {
-  __MainMemoryUnit<8> memory;
+  // note: the template argument W must be 1 here as the memory unit accesses words
+  __MainMemoryUnit<8, 1> memory;
 
   InputSignal &ctrlMemRead = memory.isRead;
   InputSignal &address = memory.address;
-  InputSignal &writeData = memory.writeData;
-
+  InputSignal &writeData = __writeDataWidener.in;
   InputSignal ctrlMemWrite{this};
 
-  OutputSignal &readData = memory.readData;
+  OutputSignal &readData = __readDataShortener.out;
   OutputSignal &isReady = memory.isReady;
 
-  OutputSignal _isRead;
-  OutputSignal _isWrite;
-  OrGate _shouldOperate;
+  OutputSignal __isRead;
+  OutputSignal __isWrite;
+  OrGate __shouldOperate;
+  SignalWideningUnit __writeDataWidener;
+  SignalShorteningUnit __readDataShortener;
 
   __DataMemoryUnit(size_t latency);
   void operate() override;
@@ -486,10 +552,10 @@ struct ConcreteBufferedUnit : public BufferedInSyncUnit {
   // propagate shouldFreeze and shouldFlush explicitly
   void bufferInputs() override { 
     if constexpr (std::derived_from<U, Freezable>) {
-      out.shouldFreeze.val = buffer.shouldFreeze.val;
+      *out.shouldFreeze = *buffer.shouldFreeze;
     }
     if constexpr (std::derived_from<U, Flushable>) {
-      out.shouldFlush.val = buffer.shouldFlush.val;
+      *out.shouldFlush = *buffer.shouldFlush;
     }
     buffer.operate();
   }

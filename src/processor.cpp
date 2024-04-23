@@ -73,33 +73,16 @@ namespace __ProcessorUtils {
 
 using namespace __ProcessorUtils;
 
-void InputSignal::changeValue(Word newValue) {
-  val = newValue;
-  unit->notifyInputChange();
-}
-
-OutputSignal& OutputSignal::operator>>(InputSignal &signal) {
-  syncedInputs.push_back(&signal);
-  return *this;
-}
-
-void OutputSignal::operator<<(Word newValue) {
-  val = newValue;
-  for (InputSignal *signal : syncedInputs) {
-    signal->changeValue(newValue);
-  }
-}
-
 Word Flushable::zeroOnFlush(Word val) const {
-  return shouldFlush.val ? Word(0u) : val;
+  return *shouldFlush ? Word(0u) : val;
 }
 
 void DecodeUnit::operate() {
-  readRegister1 << extractBits(instruction.val, 15, 19);
-  readRegister2 << extractBits(instruction.val, 20, 24);
-  writeRegister << extractBits(instruction.val, 7, 11);
-  func3 << extractBits(instruction.val, 12, 14);
-  func7 << extractBits(instruction.val, 25, 31);
+  readRegister1 << extractBits(*instruction, 15, 19);
+  readRegister2 << extractBits(*instruction, 20, 24);
+  writeRegister << extractBits(*instruction, 7, 11);
+  func3 << extractBits(*instruction, 12, 14);
+  func7 << extractBits(*instruction, 25, 31);
 }
 
 ControlUnit::ControlUnit(RegisterFile<RegisterType::Integer> *intRegs)
@@ -108,7 +91,7 @@ ControlUnit::ControlUnit(RegisterFile<RegisterType::Integer> *intRegs)
 // see Patterson-Hennessy fig 4.26 (pg 281)
 void ControlUnit::operate() {
   // zero out control signals on a nop instruction
-  if (isNop(instruction.val)) {
+  if (isNop(*instruction)) {
     ctrlRegWrite << 0u;
     ctrlMemWrite << 0u;
     ctrlMemRead << 0u;
@@ -118,7 +101,7 @@ void ControlUnit::operate() {
     return;
   }
 
-  uint32_t _opcode = opcode(instruction.val);
+  uint32_t _opcode = opcode(*instruction);
   InstructionFmt _fmt = fmt(_opcode);
   // this entire list seems like a load of crap
   bool isR = (_fmt == InstructionFmt::R);
@@ -142,18 +125,18 @@ void ControlUnit::operate() {
   ctrlIsJump << isJump;
 
   // link the return address register here (the linking happens *immediately*)
-  if (isJump && writeRegister.val != 0) {
-    intRegs->writeRegister(writeRegister.val, pc.val + 4);
+  if (isJump && *writeRegister != 0) {
+    intRegs->writeRegister(*writeRegister, *pc + 4);
   }
 }
 
 void RegisterFileUnit::operate() {
   // recall: when writes and reads are in the same cycle, writes complete first
-  if (ctrlRegWrite.val) {
-    intRegs.writeRegister(writeRegister.val, writeData.val);
+  if (*ctrlRegWrite) {
+    intRegs.writeRegister(*writeRegister, *writeData);
   }
-  readData1 << intRegs.readRegister(readRegister1.val);
-  readData2 << intRegs.readRegister(readRegister2.val);
+  readData1 << intRegs.readRegister(*readRegister1);
+  readData2 << intRegs.readRegister(*readRegister2);
 }
 
 // issues:
@@ -162,31 +145,31 @@ void RegisterFileUnit::operate() {
 //    - a fix is simple (x2) but the current version is easier to reason in assembly
 void ImmediateGenerator::operate() {
   // ignore nop instructions
-  if (isNop(instruction.val)) {
+  if (isNop(*instruction)) {
     return;
   }
-  InstructionFmt format = fmt(opcode(instruction.val));
+  InstructionFmt format = fmt(opcode(*instruction));
   switch (format) {
     case InstructionFmt::I: {   // alu, loads, jalr
-      uint32_t rawBits = extractBits(instruction.val, 20, 31);
+      uint32_t rawBits = extractBits(*instruction, 20, 31);
       immediate << int32_t(signExtend<12>(rawBits));
       break;
     }
     case InstructionFmt::S:     // stores
     case InstructionFmt::SB: {  // conditional branches
-      uint32_t immLow = extractBits(instruction.val, 7, 11);
-      uint32_t immHigh = extractBits(instruction.val, 25, 31);
+      uint32_t immLow = extractBits(*instruction, 7, 11);
+      uint32_t immHigh = extractBits(*instruction, 25, 31);
       uint32_t rawBits = (immHigh<< 5) + immLow;
       immediate << int32_t(signExtend<12>(rawBits));
       break;
     }
     case InstructionFmt::U: {   // lui
-      uint32_t imm = extractBits(instruction.val, 12, 31);
+      uint32_t imm = extractBits(*instruction, 12, 31);
       immediate << int32_t(imm<< 12);
       break;
     }
     case InstructionFmt::UJ: {  // jal
-      uint32_t rawBits = extractBits(instruction.val, 12, 31);
+      uint32_t rawBits = extractBits(*instruction, 12, 31);
       immediate << int32_t(signExtend<20>(rawBits));
       break;
     }
@@ -196,24 +179,24 @@ void ImmediateGenerator::operate() {
 }
 
 void Multiplexer::operate() {
-  output << (control.val == 0u ? input0.val : input1.val);
+  output << (*control == 0u ? *input0 : *input1);
 }
 
 // refer to Patterson-Hennessy fig 4.12 (pg 270)
 void ALUControl::operate() {
-  assert(contains(std::array{0b00, 0b01, 0b10}, ctrlAluOp.val));
-  if (ctrlAluOp.val == 0b00u) {         // loads and stores
+  assert(contains(std::array{0b00, 0b01, 0b10}, *ctrlAluOp));
+  if (*ctrlAluOp == 0b00u) {         // loads and stores
     aluOp << uint32_t(ALUOp::Add);
     return;
   }
-  if (ctrlAluOp.val == 0b01u) {         // conditional branches (currently only beq)
+  if (*ctrlAluOp == 0b01u) {         // conditional branches (currently only beq)
     aluOp << uint32_t(ALUOp::Sub);
     return;
   }
   // R-format and ALU I-format instructions
-  switch (funct3(instruction.val)) {
+  switch (funct3(*instruction)) {
     case 0x0: {   // add or sub
-      switch (funct7(instruction.val)) {
+      switch (funct7(*instruction)) {
         case 0x00:    // add
           aluOp << uint32_t(ALUOp::Add);
           break;
@@ -239,7 +222,7 @@ void ALUControl::operate() {
 }
 
 void BranchALUControl::operate() {
-  switch (func3.val) {
+  switch (*func3) {
     case 0x0:     // beq
       branchAluOp << uint32_t(BranchALUOp::Eq);
       break;
@@ -256,162 +239,171 @@ void BranchALUControl::operate() {
 }
 
 void ALUUnit::operate() {
-  switch (ALUOp{uint32_t(aluOp.val)}) {
+  switch (ALUOp{uint32_t(*aluOp)}) {
     case ALUOp::Add:
-      output << (int32_t(input0.val) + int32_t(input1.val));
+      output << (int32_t(*input0) + int32_t(*input1));
       break;
     case ALUOp::Sub:
-      output << (int32_t(input0.val) - int32_t(input1.val));
+      output << (int32_t(*input0) - int32_t(*input1));
       break;
     case ALUOp::And:
-      output << (int32_t(input0.val) & int32_t(input1.val));
+      output << (int32_t(*input0) & int32_t(*input1));
       break;
     case ALUOp::Or:
-      output << (int32_t(input0.val) | int32_t(input1.val));
+      output << (int32_t(*input0) | int32_t(*input1));
       break;
     case ALUOp::Sll:
-      output << (int32_t(input0.val)<< int32_t(input1.val));
+      output << (int32_t(*input0)<< int32_t(*input1));
       break;
     case ALUOp::Srl:
-      output << (int32_t(input0.val)>> int32_t(input1.val));
+      output << (int32_t(*input0)>> int32_t(*input1));
       break;
   }
-  zero << (output.val == 0);
+  zero << (*output == 0);
 }
 
 void BranchALUUnit::operate() {
-  switch (BranchALUOp{uint32_t(branchAluOp.val)}) {
+  switch (BranchALUOp{uint32_t(*branchAluOp)}) {
     case BranchALUOp::Eq:
-      output << (input0.val == input1.val);
+      output << (*input0 == *input1);
       break;
     case BranchALUOp::Ne:
-      output << (input0.val != input1.val);
+      output << (*input0 != *input1);
       break;
     case BranchALUOp::Lt:
-      output << (input0.val < input1.val);
+      output << (*input0 < *input1);
       break;
     case BranchALUOp::Ge:
-      output << (input0.val >= input1.val);
+      output << (*input0 >= *input1);
       break;
   }
 }
 
-__DataMemoryUnit::__DataMemoryUnit(size_t latency)
-  : memory{latency} {
-  _isRead >> _shouldOperate.input0;
-  _isWrite >> _shouldOperate.input1;
-  _shouldOperate.output >> memory.shouldOperate;
+void SignalWideningUnit::operate() {
+  out << Block<1>({*in});
+}
+
+void SignalShorteningUnit::operate() {
+  out << (*in)[0];
+}
+
+__DataMemoryUnit::__DataMemoryUnit(size_t latency) : memory{latency} {
+  __isRead >> __shouldOperate.input0;
+  __isWrite >> __shouldOperate.input1;
+  __shouldOperate.output >> memory.shouldOperate;
+  __writeDataWidener.out >> memory.writeData;
+  memory.readData >> __readDataShortener.in;
 }
 
 void __DataMemoryUnit::operate() {
-  _isRead << ctrlMemRead.val;
-  _isWrite << ctrlMemWrite.val;
+  __isRead << *ctrlMemRead;
+  __isWrite << *ctrlMemWrite;
   memory.operate();
 }
 
 // won't read and write at the same time
 void DataMemoryUnit::operate() {
-  if (ctrlMemRead.val) {
-    Word readWord = memory.readBlock<1>(address.val)[0];
+  if (*ctrlMemRead) {
+    Word readWord = memory.readBlock<1>(*address)[0];
     readData << readWord;
-  } else if (ctrlMemWrite.val) {
-    memory.writeBlock(address.val, Block<1>{writeData.val});
+  } else if (*ctrlMemWrite) {
+    memory.writeBlock(*address, Block<1>{*writeData});
   }
 }
 
 void InstructionMemoryUnit::operate() {
-  Word readInstruction = memory.readBlock<1>(address.val)[0];
+  Word readInstruction = memory.readBlock<1>(*address)[0];
   instruction << readInstruction;
 }
 
 void AndGate::operate() {
-  output << (input0.val && input1.val);
+  output << (*input0 && *input1);
 }
 
 void OrGate::operate() {
-  output << (input0.val || input1.val);
+  output << (*input0 || *input1);
 }
 
-// note: it turns out zeroing out instructionIn.val directly on shouldFlush can lead to problems
+// note: it turns out zeroing out *instructionIn directly on shouldFlush can lead to problems
 // if the output signal connected to instructionIn is not refreshed on the next turn!
 //
 // there are 2 ways to avoid this:
 //  i. propagate signals even if they are unchanged
 //  ii. don't directly set signal values
 void IFIDRegisters::operate() {
-  if (shouldFreeze.val) {
+  if (*shouldFreeze) {
     return;
   }
 
-  instructionOut << zeroOnFlush(instructionIn.val);
-  pcOut << pcIn.val;
+  instructionOut << zeroOnFlush(*instructionIn);
+  pcOut << *pcIn;
 }
 
 void IDEXRegisters::operate() {
-  if (shouldFreeze.val) {
+  if (*shouldFreeze) {
     return;
   }
 
-  readData1Out << readData1In.val;
-  readData2Out << readData2In.val;
-  immediateOut << immediateIn.val;
-  instructionOut << instructionIn.val;
+  readData1Out << *readData1In;
+  readData2Out << *readData2In;
+  immediateOut << *immediateIn;
+  instructionOut << *instructionIn;
 
-  ctrlAluSrcOut << ctrlAluSrcIn.val;
-  ctrlAluOpOut << ctrlAluOpIn.val;
-  ctrlMemWriteOut << zeroOnFlush(ctrlMemWriteIn.val);
-  ctrlMemReadOut << zeroOnFlush(ctrlMemReadIn.val);
-  ctrlMemToRegOut << ctrlMemToRegIn.val;
-  ctrlRegWriteOut << zeroOnFlush(ctrlRegWriteIn.val);
-  writeRegisterOut << writeRegisterIn.val;
-  readRegister1Out << readRegister1In.val;
-  readRegister2Out << readRegister2In.val;
+  ctrlAluSrcOut << *ctrlAluSrcIn;
+  ctrlAluOpOut << *ctrlAluOpIn;
+  ctrlMemWriteOut << zeroOnFlush(*ctrlMemWriteIn);
+  ctrlMemReadOut << zeroOnFlush(*ctrlMemReadIn);
+  ctrlMemToRegOut << *ctrlMemToRegIn;
+  ctrlRegWriteOut << zeroOnFlush(*ctrlRegWriteIn);
+  writeRegisterOut << *writeRegisterIn;
+  readRegister1Out << *readRegister1In;
+  readRegister2Out << *readRegister2In;
 
-  pcOut << pcIn.val;
+  pcOut << *pcIn;
 }
 
 void EXMEMRegisters::operate() {
-  if (shouldFreeze.val) {
+  if (*shouldFreeze) {
     return;
   }
 
   ctrlMemWriteOut << 0;     // avoid unintentional writes
   ctrlMemReadOut << 0;      // avoid unintentional reads
 
-  zeroOut << zeroIn.val;
-  aluOutputOut << aluOutputIn.val;
-  readData2Out << readData2In.val;
+  zeroOut << *zeroIn;
+  aluOutputOut << *aluOutputIn;
+  readData2Out << *readData2In;
 
-  ctrlMemWriteOut << zeroOnFlush(ctrlMemWriteIn.val);
-  ctrlMemReadOut << zeroOnFlush(ctrlMemReadIn.val);
-  ctrlMemToRegOut << ctrlMemToRegIn.val;
-  ctrlRegWriteOut << zeroOnFlush(ctrlRegWriteIn.val);
-  writeRegisterOut << writeRegisterIn.val;
+  ctrlMemWriteOut << zeroOnFlush(*ctrlMemWriteIn);
+  ctrlMemReadOut << zeroOnFlush(*ctrlMemReadIn);
+  ctrlMemToRegOut << *ctrlMemToRegIn;
+  ctrlRegWriteOut << zeroOnFlush(*ctrlRegWriteIn);
+  writeRegisterOut << *writeRegisterIn;
 
-  pcOut << pcIn.val;
-  instructionOut << instructionIn.val;
+  pcOut << *pcIn;
+  instructionOut << *instructionIn;
 }
 
 void MEMWBRegisters::operate() {
   ctrlRegWriteOut << 0;     // avoid unintentional writes
 
-  readMemoryDataOut << readMemoryDataIn.val;
-  aluOutputOut << aluOutputIn.val;
+  readMemoryDataOut << *readMemoryDataIn;
+  aluOutputOut << *aluOutputIn;
 
-  ctrlMemToRegOut << ctrlMemToRegIn.val;
-  writeRegisterOut << writeRegisterIn.val;
+  ctrlMemToRegOut << *ctrlMemToRegIn;
+  writeRegisterOut << *writeRegisterIn;
   // only assert the write control signal after other signals are properly set
-  ctrlRegWriteOut << zeroOnFlush(ctrlRegWriteIn.val);
+  ctrlRegWriteOut << zeroOnFlush(*ctrlRegWriteIn);
 
-  pcOut << pcIn.val;
-  instructionOut << instructionIn.val;
+  pcOut << *pcIn;
+  instructionOut << *instructionIn;
 }
 
 void InstructionIssueUnit::operate() {
-  if (shouldFreeze.val) {
+  if (*shouldFreeze) {
     return;
   }
-  pcOut << pcIn.val;
+  pcOut << *pcIn;
 }
 
 // synchronize signals in the c-tor
@@ -441,25 +433,25 @@ ForwardingUnit::ForwardingUnit(
 void ForwardingUnit::operate() {
   // for each Rs1 and Rs2, stores a (register num, register data signal) pair
   const std::pair<int, InputSignal&> sourceRegisters[2] {
-    { ID_EX->readRegister1In.val, ID_EX->readData1In },
-    { ID_EX->readRegister2In.val, ID_EX->readData2In }
+    { *ID_EX->readRegister1In, ID_EX->readData1In },
+    { *ID_EX->readRegister2In, ID_EX->readData2In }
   };
   // handles forwarding from both EX/MEM and MEM/WB
   for (auto [registerNum, registerDataSignal] : sourceRegisters) {
     if (
-      EX_MEM->ctrlRegWriteIn.val &&
-      EX_MEM->writeRegisterIn.val != 0 &&
-      EX_MEM->writeRegisterIn.val == registerNum
+      *EX_MEM->ctrlRegWriteIn &&
+      *EX_MEM->writeRegisterIn != 0 &&
+      *EX_MEM->writeRegisterIn == registerNum
     ) {
-      registerDataSignal.val = EX_MEM->aluOutputIn.val;
+      *registerDataSignal = *EX_MEM->aluOutputIn;
     } else if (
-      MEM_WB->buffer.ctrlRegWriteIn.val &&
-      MEM_WB->buffer.writeRegisterIn.val != 0 &&
-      MEM_WB->buffer.writeRegisterIn.val == registerNum
+      *MEM_WB->buffer.ctrlRegWriteIn &&
+      *MEM_WB->buffer.writeRegisterIn != 0 &&
+      *MEM_WB->buffer.writeRegisterIn == registerNum
     ) {
-      Word val = MEM_WB->buffer.ctrlMemToRegIn.val ?
-        MEM_WB->buffer.readMemoryDataIn.val : MEM_WB->buffer.aluOutputIn.val;
-      registerDataSignal.val = val;
+      Word val = *MEM_WB->buffer.ctrlMemToRegIn ?
+        *MEM_WB->buffer.readMemoryDataIn : *MEM_WB->buffer.aluOutputIn;
+      *registerDataSignal = val;
     }
   }
 }
@@ -467,7 +459,7 @@ void ForwardingUnit::operate() {
 void MemoryHazardDetectionUnit::operate() {
   // if the data memory is still operating, freeze all pipeline registers incl. the issue
   // unit up to EX-MEM and flush the MEM-WB pipeline registers
-  bool isBusy = !isDataMemoryReady.val;
+  bool isBusy = !*isDataMemoryReady;
   shouldFreezeIssue << isBusy;
   shouldFreezeIF_ID << isBusy;
   shouldFreezeID_EX << isBusy;
@@ -485,7 +477,7 @@ DataHazardDetectionUnit::DataHazardDetectionUnit(
   EX_MEM{&EX_MEM} {}
 
 void DataHazardDetectionUnit::operate() {
-  auto instruction = IF_ID->instructionIn.val;
+  auto instruction = *IF_ID->instructionIn;
   bool shouldStall = hasDataHazard(rs1(instruction), rs2(instruction));
   shouldFreezeIssue << shouldStall;
   shouldFlushIF_ID << shouldStall;
@@ -495,19 +487,19 @@ bool DataHazardDetectionUnit::hasDataHazard(uint32_t rs1, uint32_t rs2) {
   // forwarding: only check for load-use data hazard
   if (isForwarding) {
     return (
-      ID_EX->ctrlMemReadIn.val &&
-      (rs1 == ID_EX->writeRegisterIn.val || rs2 == ID_EX->writeRegisterIn.val)
+      *ID_EX->ctrlMemReadIn &&
+      (rs1 == *ID_EX->writeRegisterIn || rs2 == *ID_EX->writeRegisterIn)
     );
   }
   // no forwarding: check for all data hazards
   return (
     (
-      ID_EX->ctrlRegWriteIn.val && ID_EX->writeRegisterIn.val != 0 &&
-      (rs1 == ID_EX->writeRegisterIn.val || rs2 == ID_EX->writeRegisterIn.val)
+      *ID_EX->ctrlRegWriteIn && *ID_EX->writeRegisterIn != 0 &&
+      (rs1 == *ID_EX->writeRegisterIn || rs2 == *ID_EX->writeRegisterIn)
     ) ||
     (
-      EX_MEM->ctrlRegWriteIn.val && EX_MEM->writeRegisterIn.val != 0 &&
-      (rs1 == EX_MEM->writeRegisterIn.val || rs2 == EX_MEM->writeRegisterIn.val)
+      *EX_MEM->ctrlRegWriteIn && *EX_MEM->writeRegisterIn != 0 &&
+      (rs1 == *EX_MEM->writeRegisterIn || rs2 == *EX_MEM->writeRegisterIn)
     )
   );
 }
@@ -560,7 +552,7 @@ void PipelinedProcessor::synchronizeSignals() {
   issueUnitFreezeDecisionMaker.output >> issueUnit.buffer.shouldFreeze;
 
   issueUnit.out.pcOut >> pcAdder.input0;
-  pcAdder.input1.val = 4u;    // hardcoded
+  *pcAdder.input1 = 4u;    // hardcoded
 
   issueUnit.out.pcOut >> instructionMemory.address;
 
@@ -680,15 +672,15 @@ void PipelinedProcessor::synchronizeSignals() {
 }
 
 std::ostream& operator<<(std::ostream& os, const InputSignal &input) {
-  os << std::dec << int32_t(input.val) << " ";
-  os << "(" << std::showbase << std::hex << int32_t(input.val) << std::dec << ")";
+  os << std::dec << int32_t(*input) << " ";
+  os << "(" << std::showbase << std::hex << int32_t(*input) << std::dec << ")";
   os << " [in]";
   return os;
 }
 
 std::ostream& operator<<(std::ostream& os, const OutputSignal &output) {
-  os << std::dec << int32_t(output.val) << " ";
-  os << "(" << std::showbase << std::hex << int32_t(output.val) << std::dec << ")";
+  os << std::dec << int32_t(*output) << " ";
+  os << "(" << std::showbase << std::hex << int32_t(*output) << std::dec << ")";
   os << " [out]";
   return os;
 }

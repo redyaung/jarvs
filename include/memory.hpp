@@ -56,12 +56,12 @@ struct Block {
   std::byte bytes[nbytes(W)];
 
   // initialize blocks with all zeros -- unnecessary but clarifying
-  Block() {
+  constexpr Block() {
     std::fill(bytes, bytes + nbytes(W), std::byte{0u});
   }
 
   // better way: refer to make_tuple()
-  Block(std::initializer_list<Word> words) {
+  constexpr Block(std::initializer_list<Word> words) {
     if (words.size() != W) {
       throw std::invalid_argument("number of words is not equal to W");
     }
@@ -73,12 +73,20 @@ struct Block {
     }
   }
 
-  Word operator[](int wordIdx) const {
+  constexpr Word operator[](int wordIdx) const {
     if (wordIdx < 0 || wordIdx >= W) {
       throw std::out_of_range("word index is out of bounds");
     }
     auto wordPtr = std::bit_cast<Word*>(&bytes[nbytes(wordIdx)]);
     return std::bit_cast<Word>(*wordPtr);
+  }
+
+  constexpr Word &operator[](int wordIdx) {
+    if (wordIdx < 0 || wordIdx >= W) {
+      throw std::out_of_range("word index is out of bounds");
+    }
+    auto wordPtr = std::bit_cast<Word*>(&bytes[nbytes(wordIdx)]);
+    return *wordPtr;
   }
 };
 

@@ -34,18 +34,18 @@ Element renderStages(const PipelinedProcessor &cpu) {
     bool isFrozen = false;
     bool isNop = false;
     if (stage == "IF")  {
-      isFrozen = cpu.issueUnit.out.shouldFreeze.val;
+      isFrozen = *cpu.issueUnit.out.shouldFreeze;
     } else if (stage == "ID") {
-      isFrozen = cpu.IF_ID.shouldFreeze.val;
-      isNop = cpu.IF_ID.shouldFlush.val || cpu.IF_ID.instructionOut.val == 0x0;
+      isFrozen = *cpu.IF_ID.shouldFreeze;
+      isNop = *cpu.IF_ID.shouldFlush || *cpu.IF_ID.instructionOut == 0x0;
     } else if (stage =="EX") {
-      isFrozen = cpu.ID_EX.shouldFreeze.val;
-      isNop = cpu.ID_EX.shouldFlush.val || cpu.ID_EX.instructionOut.val == 0x0;
+      isFrozen = *cpu.ID_EX.shouldFreeze;
+      isNop = *cpu.ID_EX.shouldFlush || *cpu.ID_EX.instructionOut == 0x0;
     } else if (stage == "MEM") {
-      isFrozen = cpu.EX_MEM.shouldFreeze.val;
-      isNop = cpu.EX_MEM.shouldFlush.val || cpu.EX_MEM.instructionOut.val == 0x0;
+      isFrozen = *cpu.EX_MEM.shouldFreeze;
+      isNop = *cpu.EX_MEM.shouldFlush || *cpu.EX_MEM.instructionOut == 0x0;
     } else {
-      isNop = cpu.MEM_WB.out.shouldFlush.val || cpu.MEM_WB.out.instructionOut.val == 0x0;
+      isNop = *cpu.MEM_WB.out.shouldFlush || *cpu.MEM_WB.out.instructionOut == 0x0;
     }
     Element textEl = text(" " + stage + " ");
     if (isNop) {
@@ -72,35 +72,35 @@ Element renderInstructions(
 
     std::string _stage = 
       (cpu.clockCycle == 0) ? " " :     // for the case when clock cycle = 0
-      (cpu.issueUnit.out.pcOut.val == curPc) ? "IF" :
-      (cpu.IF_ID.pcOut.val == curPc) ? "ID" :
-      (cpu.ID_EX.pcOut.val == curPc) ? "EX" :
-      (cpu.EX_MEM.pcOut.val == curPc) ? "MEM" :
-      (cpu.MEM_WB.out.pcOut.val == curPc) ? "WB" : " ";
+      (*cpu.issueUnit.out.pcOut == curPc) ? "IF" :
+      (*cpu.IF_ID.pcOut == curPc) ? "ID" :
+      (*cpu.ID_EX.pcOut == curPc) ? "EX" :
+      (*cpu.EX_MEM.pcOut == curPc) ? "MEM" :
+      (*cpu.MEM_WB.out.pcOut == curPc) ? "WB" : " ";
 
     std::string stage;
     bool isFrozen = false;
     bool isNop = false;
     if (cpu.clockCycle == 0) {    // for the case when clock cycle = 0
       stage = " ";
-    } else if (cpu.issueUnit.out.pcOut.val == curPc) {
+    } else if (*cpu.issueUnit.out.pcOut == curPc) {
       stage = "IF";
-      isFrozen = cpu.issueUnit.out.shouldFreeze.val;
-    } else if (cpu.IF_ID.pcOut.val == curPc) {
+      isFrozen = *cpu.issueUnit.out.shouldFreeze;
+    } else if (*cpu.IF_ID.pcOut == curPc) {
       stage = "ID";
-      isFrozen = cpu.IF_ID.shouldFreeze.val;
-      isNop = cpu.IF_ID.shouldFlush.val || cpu.IF_ID.instructionOut.val == 0x0;
-    } else if (cpu.ID_EX.pcOut.val == curPc) {
+      isFrozen = *cpu.IF_ID.shouldFreeze;
+      isNop = *cpu.IF_ID.shouldFlush || *cpu.IF_ID.instructionOut == 0x0;
+    } else if (*cpu.ID_EX.pcOut == curPc) {
       stage = "EX";
-      isFrozen = cpu.ID_EX.shouldFreeze.val;
-      isNop = cpu.ID_EX.shouldFlush.val || cpu.ID_EX.instructionOut.val == 0x0;
-    } else if (cpu.EX_MEM.pcOut.val == curPc) {
+      isFrozen = *cpu.ID_EX.shouldFreeze;
+      isNop = *cpu.ID_EX.shouldFlush || *cpu.ID_EX.instructionOut == 0x0;
+    } else if (*cpu.EX_MEM.pcOut == curPc) {
       stage = "MEM";
-      isFrozen = cpu.EX_MEM.shouldFreeze.val;
-      isNop = cpu.EX_MEM.shouldFlush.val || cpu.EX_MEM.instructionOut.val == 0x0;
-    } else if (cpu.MEM_WB.out.pcOut.val == curPc) {
+      isFrozen = *cpu.EX_MEM.shouldFreeze;
+      isNop = *cpu.EX_MEM.shouldFlush || *cpu.EX_MEM.instructionOut == 0x0;
+    } else if (*cpu.MEM_WB.out.pcOut == curPc) {
       stage = "WB";
-      isNop = cpu.MEM_WB.out.shouldFlush.val || cpu.MEM_WB.out.instructionOut.val == 0x0;
+      isNop = *cpu.MEM_WB.out.shouldFlush || *cpu.MEM_WB.out.instructionOut == 0x0;
     } else {
       stage = " ";
     }
@@ -123,7 +123,7 @@ Element renderInstructions(
   return table.Render();
 }
 
-Element render(__MainMemoryUnit<8> mainMem) {
+Element render(__MainMemoryUnit<8, 1> mainMem) {
   auto fmtEntry = [](std::string content, int width = 5) {
     return hbox(
       text(" "),
@@ -186,7 +186,7 @@ int main(int argc, const char *argv[]) {
   PipelinedProcessor cpu(useForwarding, 2);
 
   // temporary (for testing __load_use.asm)
-  cpu.dataMemory.memory.writeBlock(0x0, Block<2>{1u, 2u});
+  cpu.dataMemory.memory.writeBlock(0x0, Block<2>({1u, 2u}));
 
   // register instructions into instruction memory
   for (auto i = 0; i < instructions.size(); ++i) {

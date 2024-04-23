@@ -118,11 +118,11 @@ namespace {
     uint32_t add = 0b0000000'00011'00010'000'00001'0110011;   // add x1, x2, x3
     EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
     instr << add;
-    EXPECT_EQ(receiver.in1.val, 2);
-    EXPECT_EQ(receiver.in2.val, 3);
-    EXPECT_EQ(receiver.in3.val, 1);
-    EXPECT_EQ(receiver.in4.val, 0x0);
-    EXPECT_EQ(receiver.in5.val, 0x0);
+    EXPECT_EQ(*receiver.in1, 2);
+    EXPECT_EQ(*receiver.in2, 3);
+    EXPECT_EQ(*receiver.in3, 1);
+    EXPECT_EQ(*receiver.in4, 0x0);
+    EXPECT_EQ(*receiver.in5, 0x0);
   }
 
   TEST(RegisterFileUnitTest, BasicOperation) {
@@ -144,11 +144,11 @@ namespace {
     // notified n times whenever there is a change in A
     EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
     read1 << 10u;
-    EXPECT_EQ(receiver.in1.val, 0xDEADBEEFu);
+    EXPECT_EQ(*receiver.in1, 0xDEADBEEFu);
 
     EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
     regWrite<< 1; writeData << 0xFACADEu; write << 10u;
-    EXPECT_EQ(receiver.in1.val, 0xFACADEu);
+    EXPECT_EQ(*receiver.in1, 0xFACADEu);
   }
 
   struct ImmediateGeneratorUnitTest : public testing::Test {
@@ -168,14 +168,14 @@ namespace {
     uint32_t addi = 0b001111101000'00010'000'00001'0010011;   // addi x1, x2, 1000
     EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
     instr << addi;
-    EXPECT_EQ(receiver.in1.val, 1000);
+    EXPECT_EQ(*receiver.in1, 1000);
   }
 
   TEST_F(ImmediateGeneratorUnitTest, LoadITypeInstructions) {
     uint32_t lw = 0b001111101000'00010'010'00001'0000011;     // lw x1, 1000(x2)
     EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
     instr << lw;
-    EXPECT_EQ(receiver.in1.val, 1000);
+    EXPECT_EQ(*receiver.in1, 1000);
   }
 
   // depends on correctness of assembler's jalr encoding (jal is similar)
@@ -183,7 +183,7 @@ namespace {
     auto jalr = encodeInstruction("jalr x0, 16(x2)");
     EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
     instr << jalr;
-    EXPECT_EQ(receiver.in1.val, 16);
+    EXPECT_EQ(*receiver.in1, 16);
   }
 
   // see Patterson-Hennessy section 2.5 (pg 93)
@@ -191,7 +191,7 @@ namespace {
     uint32_t sw = 0b0011111'00001'00010'010'01000'0100011;    // sw x1, 1000(x2)
     EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
     instr << sw;
-    EXPECT_EQ(receiver.in1.val, 1000);
+    EXPECT_EQ(*receiver.in1, 1000);
   }
 
   TEST_F(ImmediateGeneratorUnitTest, UTypeInstructions) {
@@ -202,7 +202,7 @@ namespace {
     auto jal = encodeInstruction("jal x0, 32");
     EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
     instr << jal;
-    EXPECT_EQ(receiver.in1.val, 32);
+    EXPECT_EQ(*receiver.in1, 32);
   }
 
   TEST(MultiplexerTest, BasicOperation) {
@@ -217,11 +217,11 @@ namespace {
 
     EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
     in0 << 0xDEADBEEFu; in1 << 0xFACADEu; ctrl << 0x0u;
-    EXPECT_EQ(receiver.in1.val, 0xDEADBEEFu);
+    EXPECT_EQ(*receiver.in1, 0xDEADBEEFu);
 
     EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
     ctrl << 0x1u;
-    EXPECT_EQ(receiver.in1.val, 0xFACADEu);
+    EXPECT_EQ(*receiver.in1, 0xFACADEu);
   }
 
   // see Patterson-Hennessy fig 4.12 (pg 270) for instruction encodings
@@ -242,28 +242,28 @@ namespace {
     uint32_t add = 0b0000000'00011'00010'000'00001'0110011;
     EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
     instr << add; aluOp << 0b10u;
-    EXPECT_EQ(receiver.in1.val, uint32_t(ALUOp::Add));
+    EXPECT_EQ(*receiver.in1, uint32_t(ALUOp::Add));
   }
 
   TEST_F(ALUControlTest, Sub) {
     uint32_t sub = 0b0100000'00011'00010'000'00001'0110011;
     EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
     instr << sub; aluOp << 0b10u;
-    EXPECT_EQ(receiver.in1.val, uint32_t(ALUOp::Sub));
+    EXPECT_EQ(*receiver.in1, uint32_t(ALUOp::Sub));
   }
 
   TEST_F(ALUControlTest, Addi) {
     uint32_t addi = 0b001111101000'00010'000'00001'0010011;
     EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
     instr << addi; aluOp << 0b10u;
-    EXPECT_EQ(receiver.in1.val, uint32_t(ALUOp::Add));
+    EXPECT_EQ(*receiver.in1, uint32_t(ALUOp::Add));
   }
 
   TEST_F(ALUControlTest, Lw) {
     uint32_t lw = 0b001111101000'00010'010'00001'0000011;
     EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
     instr << lw; aluOp << 0b00u;
-    EXPECT_EQ(receiver.in1.val, uint32_t(ALUOp::Add));
+    EXPECT_EQ(*receiver.in1, uint32_t(ALUOp::Add));
   }
 
   // (unused) since branch logic has been moved to the decode stage
@@ -272,7 +272,7 @@ namespace {
     uint32_t beq = 0b0000000'00001'00010'000'00000'1100011;
     EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
     instr << beq; aluOp << 0b01u;
-    EXPECT_EQ(receiver.in1.val, uint32_t(ALUOp::Sub));
+    EXPECT_EQ(*receiver.in1, uint32_t(ALUOp::Sub));
   }
 
   struct ALUUnitTest : public testing::Test {
@@ -293,41 +293,41 @@ namespace {
   TEST_F(ALUUnitTest, ArithmeticOperations) {
     EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
     in0 << 14; in1 << 8; op << uint32_t(ALUOp::Add);
-    EXPECT_EQ(receiver.in1.val, 22);
+    EXPECT_EQ(*receiver.in1, 22);
 
     EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
     in0 << 14; in1 << 8; op << uint32_t(ALUOp::Sub);
-    EXPECT_EQ(receiver.in1.val, 6);
+    EXPECT_EQ(*receiver.in1, 6);
 
     EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
     in0 << 8; in1 << 14; op << uint32_t(ALUOp::Sub);
-    EXPECT_EQ(int(receiver.in1.val), -6);
+    EXPECT_EQ(int(*receiver.in1), -6);
   }
 
   TEST_F(ALUUnitTest, LogicalOperations) {
     EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
     in0 << 1u; in1 << 0u; op << uint32_t(ALUOp::And);
-    EXPECT_EQ(receiver.in1.val, 0);   // 1 & 0 = 0
+    EXPECT_EQ(*receiver.in1, 0);   // 1 & 0 = 0
 
     EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
     in0 << 1u; in1 << 1u; op << uint32_t(ALUOp::And);
-    EXPECT_EQ(receiver.in1.val, 1);   // 1 & 1 = 1
+    EXPECT_EQ(*receiver.in1, 1);   // 1 & 1 = 1
 
     EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
     in0 << 1u; in1 << 0u; op << uint32_t(ALUOp::Or);
-    EXPECT_EQ(receiver.in1.val, 1);   // 1 | 0 = 1
+    EXPECT_EQ(*receiver.in1, 1);   // 1 | 0 = 1
   }
 
   TEST_F(ALUUnitTest, ZeroOutput) {
     EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
     in0 << 8; in1 << 8; op << uint32_t(ALUOp::Sub);
-    EXPECT_EQ(receiver.in1.val, 0);
-    EXPECT_EQ(receiver.in2.val, 1);
+    EXPECT_EQ(*receiver.in1, 0);
+    EXPECT_EQ(*receiver.in2, 1);
 
     EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
     in0 << 0; in1 << 1; op << uint32_t(ALUOp::And);
-    EXPECT_EQ(receiver.in1.val, 0);
-    EXPECT_EQ(receiver.in2.val, 1);
+    EXPECT_EQ(*receiver.in1, 0);
+    EXPECT_EQ(*receiver.in2, 1);
   }
 
   struct DataMemoryUnitTest : public testing::Test {
@@ -363,7 +363,7 @@ namespace {
     EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
     memUnit.memory.writeBlock(0xA0, Block<1>{0xFACADEu});
     willRead << 1; addr << 0xA0;
-    EXPECT_EQ(receiver.in1.val, 0xFACADEu);
+    EXPECT_EQ(*receiver.in1, 0xFACADEu);
   }
 
   TEST(AndGateTest, BasicOperation) {
@@ -377,11 +377,11 @@ namespace {
 
     EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
     in0 << 1u; in1 << 1u;
-    EXPECT_EQ(receiver.in1.val, 1u);
+    EXPECT_EQ(*receiver.in1, 1u);
 
     EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
     in0 << 0u; in1 << 1u;
-    EXPECT_EQ(receiver.in1.val, 0u);
+    EXPECT_EQ(*receiver.in1, 0u);
   }
 
   // here, we use MEM/WB pipeline registers but this choice is arbitrary
@@ -397,13 +397,13 @@ namespace {
 
     EXPECT_CALL(receiver, notifyInputChange()).Times(0);
     read << 0xDEADu; alu << 0xFACADEu;
-    EXPECT_EQ(receiver.in1.val, 0x0u);
-    EXPECT_EQ(receiver.in2.val, 0x0u);
+    EXPECT_EQ(*receiver.in1, 0x0u);
+    EXPECT_EQ(*receiver.in2, 0x0u);
 
     EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
     pRegisters.operate();   // normally called by a processor
-    EXPECT_EQ(receiver.in1.val, 0xDEADu);
-    EXPECT_EQ(receiver.in2.val, 0xFACADEu);
+    EXPECT_EQ(*receiver.in1, 0xDEADu);
+    EXPECT_EQ(*receiver.in2, 0xFACADEu);
   }
 
   TEST(PipelinedProcessorTest, AddInstruction) {
