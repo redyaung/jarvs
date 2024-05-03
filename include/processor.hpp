@@ -382,6 +382,37 @@ struct SignalShorteningUnit : public OutOfSyncUnit {
   void operate() override;
 };
 
+struct ___DataMemoryUnit : public InSyncUnit {
+  std::shared_ptr<TimedMemory<1>> memory;
+
+  InputSignal ctrlMemRead{this};
+  InputSignal address{this};
+  InputSignal &writeData = __writeDataWidener.in;
+  InputSignal ctrlMemWrite{this};
+
+  OutputSignal readData;
+  OutputSignal isReady;
+
+  SignalWideningUnit __writeDataWidener;
+
+  ___DataMemoryUnit(std::shared_ptr<TimedMemory<1>> memory) : memory{memory} {}
+  void operate() override {
+    if (*ctrlMemRead) {
+      std::optional<Block<1>> readVal = memory->readBlock(*address);
+      isReady << readVal.has_value();
+      if (readVal.has_value()) {
+        readData << readVal.value()[0];
+      }
+    } else if (*ctrlMemWrite) {
+      bool hasWritten = memory->writeBlock(*address, *__writeDataWidener.out);
+      isReady << hasWritten;
+    } else {
+      assert(memory->state == MemoryState::Ready);
+      isReady << true;
+    }
+  }
+};
+
 struct __DataMemoryUnit : public InSyncUnit {
   // note: the template argument W must be 1 here as the memory unit accesses words
   __MainMemoryUnit<8, 1> memory;
@@ -684,7 +715,7 @@ struct PipelinedProcessor : public Processor {
   EXMEMRegisters EX_MEM;
 
   // memory (MEM)
-  __DataMemoryUnit dataMemory;
+  ___DataMemoryUnit dataMemory;
   BufferedMEMWBRegisters MEM_WB;
 
   // write-back (WB)

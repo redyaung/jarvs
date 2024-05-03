@@ -8,6 +8,7 @@
 #include <ftxui/dom/table.hpp>
 #include <ftxui/screen/screen.hpp>
 #include "assembler.hpp"
+#include "memory.hpp"
 #include "processor.hpp"
 
 using namespace ftxui;
@@ -123,7 +124,7 @@ Element renderInstructions(
   return table.Render();
 }
 
-Element render(__MainMemoryUnit<8, 1> mainMem) {
+Element render(TimedMainMemory<8, 1> &mainMem) {
   auto fmtEntry = [](std::string content, int width = 5) {
     return hbox(
       text(" "),
@@ -146,7 +147,11 @@ Element render(__MainMemoryUnit<8, 1> mainMem) {
     curRow.push_back(fmtEntry(std::to_string(row * 32), 5) | bold);
     for (auto col = 0; col < 8; ++col) {
       auto addr = row * 32 + col * 4;
-      int32_t val = mainMem.readBlock<1>(addr)[0];
+      Word valWord;
+      for (int i = 0; i < 4; i++) {
+        valWord.bytes[i] = mainMem.bytes[addr + i];
+      }
+      int32_t val = Word::to<int32_t>(valWord);
       curRow.push_back(fmtEntry(std::to_string(val)));
     }
     tableEntries.push_back(curRow);
@@ -185,9 +190,6 @@ int main(int argc, const char *argv[]) {
  
   PipelinedProcessor cpu(useForwarding, 2);
 
-  // temporary (for testing __load_use.asm)
-  cpu.dataMemory.memory.writeBlock(0x0, Block<2>({1u, 2u}));
-
   // register instructions into instruction memory
   for (auto i = 0; i < instructions.size(); ++i) {
     cpu.instructionMemory.memory.writeBlock(i * 4, Block<1>{instructions[i]});
@@ -210,7 +212,7 @@ int main(int argc, const char *argv[]) {
         ),
         window(
           text("Memory (RAM)"),
-          render(cpu.dataMemory.memory)
+          render(*((TimedMainMemory<8, 1> *) cpu.dataMemory.memory.get()))
         ) | flex
       ),
       window(

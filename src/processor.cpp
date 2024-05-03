@@ -507,7 +507,9 @@ bool DataHazardDetectionUnit::hasDataHazard(uint32_t rs1, uint32_t rs2) {
 PipelinedProcessor::PipelinedProcessor(
   bool useForwarding,
   size_t memoryLatency
-) : dataMemory(memoryLatency),
+) : dataMemory(std::shared_ptr<TimedMemory<1>>(
+      new TimedMainMemory<8, 1>(memoryLatency)
+    )),
     forwardingUnit(ID_EX, EX_MEM, MEM_WB),
     hazardDetectionUnit(useForwarding, issueUnit, IF_ID, ID_EX, EX_MEM),
     control(&registers.intRegs)
@@ -770,6 +772,16 @@ std::ostream& operator<<(std::ostream& os, const BranchALUUnit &branchAlu) {
   os << "\t" << "input1: " << branchAlu.input1 << std::endl;
   os << "\t" << "branchAluOp: " << branchAlu.branchAluOp << std::endl;
   os << "\t" << "output: " << branchAlu.output;
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const ___DataMemoryUnit &dataMemory) {
+  os << "in ___DataMemoryUnit: " << std::endl;
+  os << "\t" << "address: " << dataMemory.address << std::endl;
+  os << "\t" << "writeData: " << dataMemory.writeData << std::endl;
+  os << "\t" << "ctrlMemRead: " << dataMemory.ctrlMemRead << std::endl;
+  os << "\t" << "ctrlMemWrite: " << dataMemory.ctrlMemWrite << std::endl;
+  os << "\t" << "readData: " << dataMemory.readData;
   return os;
 }
 

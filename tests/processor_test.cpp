@@ -525,7 +525,7 @@ namespace {
     uint32_t lw = 0b000000000100'00010'010'00001'0000011;     // lw x1, 4(x2)
     processor.instructionMemory.memory.writeBlock(0x0, Block<1>{lw});
     processor.registers.intRegs.writeRegister(2, 0x10); 
-    processor.dataMemory.memory.writeBlock(0x14, Block<1>{0xBEEFu});
+    processor.dataMemory.memory->writeBlock(0x14, Block<1>{0xBEEFu});
 
     for (int cycle = 0; cycle < 5; cycle++) {
       processor.executeOneCycle();
@@ -538,7 +538,7 @@ namespace {
 
     // store 0xFACADEu at the memory address 0x10 + 4 = 0x14
     uint32_t sw = 0b0000000'00001'00010'010'00100'0100011;    // sw x1, 4(x2)
-    processor.instructionMemory.memory.writeBlock(0x0, Block<1>{sw});
+    processor.instructionMemory.memory->writeBlock(0x0, Block<1>{sw});
     processor.registers.intRegs.writeRegister(1, 0xFACADEu); 
     processor.registers.intRegs.writeRegister(2, 0x10u);
 
@@ -577,7 +577,8 @@ namespace {
   TEST(PipelinedProcessorTest, LoadAddSequence) {
     PipelinedProcessor processor;
 
-    processor.dataMemory.memory.writeBlock(0x0, Block<2>{1u, 2u});
+    processor.dataMemory.memory->writeBlock(0x0, Block<1>{1u});
+    processor.dataMemory.memory->writeBlock(0x4, Block<1>{2u});
     std::vector<std::string> instructions {
       "lw x1, 0(x0)",
       "lw x2, 4(x0)",
@@ -630,7 +631,7 @@ namespace {
   TEST(PipelinedProcessorTest, ForwardFromMEM_WB) {
     PipelinedProcessor processor(true);
 
-    processor.dataMemory.memory.writeBlock(0x0, Block<1>{24});
+    processor.dataMemory.memory->writeBlock(0x0, Block<1>{24});
     std::vector<std::string> instructions {
       "lw x1, 0(x0)",
       "add x0, x0, x0",   // nop
