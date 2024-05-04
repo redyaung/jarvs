@@ -13,667 +13,196 @@
 #include <cstdlib>
 #include <iomanip>
 #include <string>
+#include <vector>
+#include <format>
 
 #include "utils.hpp"
 #include "generator.hpp"
 
-// forward declarations
-bool isAligned(uint32_t addr, uint32_t nwords);
-uint32_t randInt(uint32_t min, uint32_t max);
-
-enum class WriteScheme {
+enum struct WriteScheme {
   WriteThrough, WriteBack
 };
-enum class ReplacementPolicy {
+
+enum struct ReplacementPolicy {
   Random, PreciseLRU, ApproximateLRU
 };
-enum class MemoryState {
+
+enum struct MemoryState {
   Ready, Reading, Writing
 };
 
-// 32-bit word - make float conversions explicit as they are uncommon
+// Represents a 32-bit word that can currently hold either an integer or a float.
 struct Word {
+public:
+  constexpr Word();
+  constexpr Word(uint32_t value);
+  explicit constexpr Word(float value);
+
+  constexpr operator uint32_t() const;
+  explicit constexpr operator float() const;
+
+  template<typename T>
+  static constexpr Word from(T value);
+
+  template<typename T>
+  static constexpr T to(Word word);
+
+private:
   std::byte bytes[nbytes(1)];
-
-  constexpr Word() {
-    std::fill(bytes, bytes + nbytes(1), std::byte{0u});
-  }
-  constexpr Word(uint32_t value) : Word(from(value)) {}
-  explicit constexpr Word(float value) : Word(from(value)) {}
-
-  constexpr operator uint32_t() const { return to<uint32_t>(*this); }
-  explicit constexpr operator float() const { return to<float>(*this); }
-
-  template<typename T>
-  static constexpr Word from(T value) {
-    static_assert(sizeof(T) == 4);    // T must occupy 32 bytes
-    Word word;
-    auto b = std::bit_cast<std::byte*>(&value);
-    // todo: currently only works for little endian
-    for (auto i = 0; i < nbytes(1); i++) {
-      word.bytes[i] = b[i];
-    }
-    return word;
-  }
-
-  template<typename T>
-  static constexpr T to(Word word) {
-    static_assert(sizeof(T) == 4);    // T must occupy 32 bytes
-    return std::bit_cast<T>(word.bytes);
-  }
 };
 
-// a block containing w words
-template<uint32_t W>
+// A block contains a fixed number of words which is determined at initialization time. Therefore,
+// blocks can only be assigned to one another if their sizes agree. Internally, a block contains
+// a contiguous sequence of words which can be accessed using the subscript operator.
 struct Block {
-  std::byte bytes[nbytes(W)];
+public:
+  Block(size_t nwords) : words(nwords)  {}
+  Block(std::initializer_list<Word> words) : words(words) {}
 
-  // initialize blocks with all zeros -- unnecessary but clarifying
-  constexpr Block() {
-    std::fill(bytes, bytes + nbytes(W), std::byte{0u});
-  }
+  Block(const Block &other) = default;
+  Block& operator=(const Block &other);
 
-  // better way: refer to make_tuple()
-  constexpr Block(std::initializer_list<Word> words) {
-    if (words.size() != W) {
-      throw std::invalid_argument("number of words is not equal to W");
-    }
-    auto wordIdx = 0;
-    for (auto it = words.begin(); it != words.end(); it++, wordIdx++) {
-      for (auto byteIdx = 0; byteIdx < nbytes(1); byteIdx++) {
-        bytes[nbytes(wordIdx) + byteIdx] = (*it).bytes[byteIdx];
-      }
-    }
-  }
+  Block(Block &&other) = default;
+  Block& operator=(Block &&other);
 
-  constexpr Word operator[](int wordIdx) const {
-    if (wordIdx < 0 || wordIdx >= W) {
-      throw std::out_of_range("word index is out of bounds");
-    }
-    auto wordPtr = std::bit_cast<Word*>(&bytes[nbytes(wordIdx)]);
-    return std::bit_cast<Word>(*wordPtr);
-  }
+  // Word Access
+  size_t size() const;
+  Word operator[](size_t wordIdx) const;
+  Word &operator[](size_t wordIdx);
 
-  constexpr Word &operator[](int wordIdx) {
-    if (wordIdx < 0 || wordIdx >= W) {
-      throw std::out_of_range("word index is out of bounds");
-    }
-    auto wordPtr = std::bit_cast<Word*>(&bytes[nbytes(wordIdx)]);
-    return *wordPtr;
-  }
+  // Sub-block access
+  Block getSubblock(size_t from, size_t len) const;
+  void setSubblock(size_t from, const Block &block);
+
+private:
+  std::vector<Word> words;
 };
 
-// A: number of words contained in a single access
-template<uint32_t A>
 struct TimedMemory {
+public:
+  std::optional<Block> readBlock(uint32_t addr, size_t blockSize);
+  bool writeBlock(uint32_t addr, const Block &block);
+  MemoryState getState() const;
+
+  // Instantaneous analogs for the timed readBlock and writeBlock functions.
+  // Should only be used in *testing* code.
+  Block _readBlockTillDone(uint32_t addr, size_t blockSize);
+  void _writeBlockTillDone(uint32_t addr, const Block &block);
+
+  virtual ~TimedMemory();
+
+protected:
   MemoryState state = MemoryState::Ready;
-  std::optional<Generator<std::optional<Block<A>>>> readGen;
+
+  virtual Generator<std::optional<Block>> makeReadGen(uint32_t addr, size_t blockSize) = 0; 
+  virtual Generator<bool> makeWriteGen(uint32_t addr, const Block &block) = 0;
+
+private:
+  std::optional<Generator<std::optional<Block>>> readGen;
   std::optional<Generator<bool>> writeGen;
-  uint32_t opAddr;    // used only for invariant checking
 
-  std::optional<Block<A>> readBlock(uint32_t addr) {
-    if (state == MemoryState::Writing) {
-      throw std::invalid_argument("cannot read when memory is busy writing");
-    }
-    if (state == MemoryState::Reading && opAddr != addr) {
-      throw std::invalid_argument("previous addr " + std::to_string(opAddr) +
-        " and current addr " + std::to_string(addr) + " do not match");
-    }
-
-    if (state == MemoryState::Ready) {
-      readGen = std::move(makeReadGen(addr));
-      state = MemoryState::Reading;
-    }
-    opAddr = addr;
-    std::optional<Block<A>> result = readGen.value()();
-    if (result.has_value()) {
-      state = MemoryState::Ready;
-    }
-    return result;
-  }
-
-  bool writeBlock(uint32_t addr, Block<A> block) {
-    if (state == MemoryState::Reading) {
-      throw std::invalid_argument("cannot write when memory is busy reading");
-    }
-    if (state == MemoryState::Writing && opAddr != addr) {
-      throw std::invalid_argument("previous addr " + std::to_string(opAddr) +
-        " and current addr " + std::to_string(addr) + " do not match");
-    }
-
-    if (state == MemoryState::Ready) {
-      writeGen = std::move(makeWriteGen(addr, block));
-      state = MemoryState::Writing;
-    }
-    opAddr = addr;
-    bool result = writeGen.value()();
-    if (result) {
-      state = MemoryState::Ready;
-    }
-    return result;
-  }
-
-  virtual ~TimedMemory() {}
-  virtual Generator<std::optional<Block<A>>> makeReadGen(uint32_t addr) = 0; 
-  virtual Generator<bool> makeWriteGen(uint32_t addr, Block<A> block) = 0;
+  // Stores the current address that is being operated on (for invariant check)
+  uint32_t curAddr;
 };
 
-template<uint32_t AddressSpace, uint32_t A>
-struct TimedMainMemory : public TimedMemory<A> {
-  std::byte bytes[1<< AddressSpace];
-
+struct TimedMainMemory : public TimedMemory {
+public:
+  const size_t addressSpace;
   const size_t latency;
-  int cyclesElapsed = 0;
 
-  TimedMainMemory(size_t latency) : latency{latency} {
-    std::fill(bytes, bytes + (1<< AddressSpace), std::byte{0u});
-  }
+  Block storage;
 
-  Generator<std::optional<Block<A>>> makeReadGen(uint32_t addr) override {
-    if (!isAligned(addr, A)) {
-      throw std::invalid_argument("address " + std::to_string(addr) + " is not word-aligned");
-    } else if (addr + nbytes(A) > (1<< AddressSpace)) {
-      throw std::out_of_range("end address is out of address space");
-    }
-    while (cyclesElapsed + 1 < latency) {
-      co_yield std::nullopt;
-      ++cyclesElapsed;
-    }
-    Block<A> block;
-    std::copy(bytes + addr, bytes + addr + nbytes(A), block.bytes);
-    cyclesElapsed = 0;
-    co_yield block;
-  }
+  TimedMainMemory(size_t addressSpace, size_t latency);
 
-  Generator<bool> makeWriteGen(uint32_t addr, Block<A> block) override {
-    if (!isAligned(addr, A)) {
-      throw std::invalid_argument("address " + std::to_string(addr) + " is not word-aligned");
-    } else if (addr + nbytes(A) > (1<< AddressSpace)) {
-      throw std::out_of_range("end address is out of address space");
-    }
-    while (cyclesElapsed + 1 < latency) {
-      co_yield false;
-      ++cyclesElapsed;
-    }
-    std::copy(block.bytes, block.bytes + nbytes(A), bytes + addr);
-    cyclesElapsed = 0;
-    co_yield true;
-  }
+protected:
+  Generator<std::optional<Block>> makeReadGen(uint32_t addr, size_t blockSize) override;
+  Generator<bool> makeWriteGen(uint32_t addr, const Block &block) override;
 };
 
-// Cache
-// W: number of words in a block
-// S: number of blocks in a set (set-associativity)
-// B: number of blocks in the cache
-// A: number of words contained in each access
-// fields: | tag(rem) | index(log(B)) | block(log(W)) | word(2) |
-template<uint32_t W, uint32_t S, uint32_t B, uint32_t A,
-  WriteScheme WSch = WriteScheme::WriteThrough,
-  ReplacementPolicy Plc = ReplacementPolicy::Random>
-struct TimedCache : public TimedMemory<A> {
-  static_assert(std::has_single_bit(W), "W must be a power of 2");
-  static_assert(std::has_single_bit(B), "B must be a power of 2");
-  static_assert(std::has_single_bit(S), "S must be a power of 2");
-  static_assert(B % S == 0, "set block count must divide total block count");
-  static_assert(W % A == 0, "access block size must divide cache block size");
-
-  static constexpr uint32_t nBlockBits = static_cast<uint32_t>(std::countr_zero(W));
-  static constexpr uint32_t _indexBits = static_cast<uint32_t>(std::countr_zero(B));
-  static constexpr uint32_t nSetBits = static_cast<uint32_t>(std::countr_zero(S));
-  static constexpr uint32_t nIndexBits = _indexBits - nSetBits;
-  static constexpr uint32_t setCount = B / S;
-
+struct TimedCache : public TimedMemory {
+public:
   struct Entry {
     bool valid = false;
     bool dirty = false;
     uint32_t tag = 0u;
-    Block<W> block;
-    int lastAccessedTime = 0;       // only used for precise LRU
+    Block block;
+    int lastAccessedTime = 0;   // Used only for precise LRU
+
+    Entry(size_t blockSize);
   };
 
-  Entry entries[B];
-  std::shared_ptr<TimedMemory<W>> lowerMem;
-
-  // used only for approximate LRU; generalization of the approximate LRU cache
-  // scheme for 4-way set-associative caches (Patterson-Hennessy 5.8)
-  std::bitset<S - 1> lruBits[setCount];
-  int totalAccessCount = 0;
-
+  const size_t blockSize;       // Number of words in a block
+  const size_t setSize;         // Number of blocks in a set (set associativity)
+  const size_t cacheSize;       // Number of blocks in the cache
+  const WriteScheme scheme;
+  const ReplacementPolicy policy;
   const size_t latency;
-  int cyclesElapsed = 0;
 
-  TimedCache(std::shared_ptr<TimedMemory<W>> lowerMem, size_t latency)
-    : lowerMem{lowerMem}, latency{latency} {}
+  std::vector<Entry> entries;
+  std::shared_ptr<TimedMemory> lowerMem;
 
-  Generator<std::optional<Block<A>>> makeReadGen(uint32_t addr) override {
-    if (!isAligned(addr, A)) {
-      throw std::invalid_argument("address " + std::to_string(addr) + " is not word-aligned");
-    }
-    while (cyclesElapsed + 1 < latency) {
-      co_yield std::nullopt;
-      ++cyclesElapsed;
-    }
-    cyclesElapsed = 0;
-    uint32_t tag = tagBits(addr);
-    uint32_t setIdx = indexBits(addr);
-    std::optional<uint32_t> entryIdx = findCacheEntry(addr);
-    if (!entryIdx.has_value()) {  // cache miss
-      // find a free cache entry -- may not exist
-      uint32_t startingEntryIdx = setIdx * S;
-      auto freeEntry = std::find_if(
-        entries + startingEntryIdx,
-        entries + startingEntryIdx + S,
-        [](const Entry &entry) { return !entry.valid; }
-      );
-      // evict one of the entries randomly if there are no free entries
-      if (freeEntry == entries + startingEntryIdx + S) {
-        auto selectEvictionIndex = [&]() -> uint32_t {
-          if constexpr (Plc == ReplacementPolicy::PreciseLRU) {
-            auto evictEntryIt = std::min_element(entries + startingEntryIdx,
-              entries + startingEntryIdx + S,
-              [](const Entry &e1, const Entry &e2) {
-                return e1.lastAccessedTime < e2.lastAccessedTime;
-              });
-            return evictEntryIt - entries;
-          } else if constexpr (Plc == ReplacementPolicy::ApproximateLRU) {
-            uint32_t lruEntryIdx = 0;
-            for (auto bit = 0, lruBit = 0; bit < nSetBits; ++bit) {
-              bool choice = !lruBits[setIdx][lruBit];
-              lruEntryIdx = (lruEntryIdx<< 1) + uint32_t(choice);
-              lruBit = 2 * lruBit + 1 + int(choice);
-            }
-            return lruEntryIdx + startingEntryIdx;
-          } else {
-            return randInt(startingEntryIdx, startingEntryIdx + S - 1);
-          }
-        };
-        uint32_t evictedIdx = selectEvictionIndex();
-        // (write-back only) if cache entry is dirty, write it back before eviction
-        if constexpr (WSch == WriteScheme::WriteBack) {
-          if (entries[evictedIdx].dirty) {
-            uint32_t evictedIndexBits = evictedIdx / S;
-            uint32_t evictedTagBits = entries[evictedIdx].tag;
-            uint32_t indexOffset = nBlockBits + 2;
-            uint32_t tagOffset = indexOffset + nIndexBits;
-            uint32_t evictedAddr = (evictedTagBits<< tagOffset) | (evictedIndexBits<< indexOffset);
-            while (!lowerMem->writeBlock(evictedAddr, entries[evictedIdx].block)) {
-              co_yield std::nullopt;
-            }
-          }
-        }
-        entryIdx = std::make_optional(evictedIdx);
-      } else {
-        entryIdx = std::make_optional(freeEntry - entries);
-      }
-      // read the block at the requested address from main memory
-      uint32_t startingAddr = (addr / nbytes(W)) * nbytes(W);
-      std::optional<Block<W>> readResult;
-      do {
-        readResult = lowerMem->readBlock(startingAddr);
-      } while (!readResult.has_value());
-      entries[*entryIdx] = Entry{true, false, tag, *readResult};
-    }
-    // now, the entry at entryIdx contains a valid cache
-    Entry &entry = entries[*entryIdx];
-    const Block<W> &entryBlock = entry.block;
-    Block<A> requestedBlock;
-    uint32_t blockOffset = addr % nbytes(W);
-    std::copy(entryBlock.bytes + blockOffset, entryBlock.bytes + blockOffset + nbytes(A),
-      requestedBlock.bytes);
-    updateLRUInfo(entry, addr, *entryIdx % S);
-    ++totalAccessCount;     // update analytics
-    co_yield requestedBlock;
-  }
+  TimedCache(
+    size_t blockSize,
+    size_t setSize,
+    size_t cacheSize,
+    WriteScheme scheme,
+    ReplacementPolicy policy,
+    std::shared_ptr<TimedMemory> lowerMem,
+    size_t latency
+  );
 
-  Generator<bool> makeWriteGen(uint32_t addr, Block<A> block) override {
-    if (!isAligned(addr, A)) {
-      throw std::invalid_argument("address " + std::to_string(addr) + " is not word-aligned");
-    }
-    while (cyclesElapsed + 1 < latency) {
-      co_yield false;
-      ++cyclesElapsed;
-    }
-    cyclesElapsed = 0;
-    std::optional<uint32_t> entryIdx = findCacheEntry(addr);
-    // (write-back only) put the block containing address into cache first on cache miss
-    if constexpr (WSch == WriteScheme::WriteBack) {
-      if (!entryIdx.has_value()) {
-        while (!this->readBlock(addr)) {
-          co_yield false;
-        }
-        entryIdx = findCacheEntry(addr);
-        assert(entryIdx.has_value());
-      }
-    }
-    // on cache hit, update cache entries (regardless of write scheme)
-    if (entryIdx.has_value()) {
-      Entry &entry = entries[*entryIdx];
-      Block<W> &entryBlock = entry.block;
-      uint32_t blockAddr = addr % nbytes(W);
-      std::copy(block.bytes, block.bytes + nbytes(A), entryBlock.bytes + blockAddr);
-      entry.dirty = true;
-      updateLRUInfo(entry, addr, *entryIdx % S);
-    }
-    // (write-through only) write unconditionally to the main memory
-    if constexpr (WSch == WriteScheme::WriteThrough) {
-      while (!lowerMem->writeBlock(addr, block)) {
-        co_yield false;
-      }
-    }
-    ++totalAccessCount;     // update analytics
-    co_yield true;
-  }
+protected:
+  Generator<std::optional<Block>> makeReadGen(uint32_t addr, size_t readBlockSize) override;
+  Generator<bool> makeWriteGen(uint32_t addr, const Block &block) override;
 
-  std::optional<uint32_t> findCacheEntry(uint32_t addr) {
-    uint32_t tag = tagBits(addr);
-    uint32_t setIdx = indexBits(addr);
-    uint32_t startingEntryIdx = setIdx * S;
-    for (auto offset = 0; offset < S; offset++) {
-      const Entry &entry = entries[startingEntryIdx + offset];
-      if (entry.valid && entry.tag == tag) {
-        return std::make_optional(startingEntryIdx + offset);
-      }
-    }
-    return {};
-  }
+private:
+  std::vector<std::vector<bool>> lruBits;   // Used only for approx LRU (Patterson-Hennessy 5.8)
+  int totalAccessCount = 0;                 // Used only for precise LRU
 
-  // localBlockIdx refers to the index of the block or entry in the set
-  void updateLRUInfo(Entry &entry, uint32_t addr, uint32_t localBlockIdx) {
-    if constexpr (Plc == ReplacementPolicy::PreciseLRU) {
-      entry.lastAccessedTime = totalAccessCount;
-    } else if constexpr (Plc == ReplacementPolicy::ApproximateLRU) {
-      uint32_t setIdx = indexBits(addr);
-      std::bitset<nSetBits> blockAddr(localBlockIdx);
-      // iterate from the most significant bit
-      for (int bit = nSetBits - 1, lruBit = 0; bit >= 0; bit--) {
-        lruBits[setIdx][lruBit] = blockAddr[bit];
-        lruBit = 2 * lruBit + 1 + int(blockAddr[bit]);
-      }
-    }
-  }
+  std::optional<uint32_t> findCacheEntry(uint32_t addr);
 
-  uint32_t tagBits(uint32_t addr) {
-    return addr>> (nIndexBits + nBlockBits + 2);
-  }
+  // Updates internal data structures if the replacement policy is either approximate
+  // or precise LRU.
+  //  - localBlockIdx: index of the block or entry in the set
+  void updateLRUInfo(Entry &entry, uint32_t addr, uint32_t localBlockIdx);
 
-  uint32_t indexBits(uint32_t addr) {
-    return (addr>> (nBlockBits + 2)) & ((1<< nIndexBits) - 1);
-  }
+  // fields: | tag(rem) | index(log(B)) | block(log(W)) | word(2) |
+  inline size_t blockBitCount() const;
+  inline size_t setBitCount() const;
+  inline size_t indexBitCount() const;
+  inline size_t setCount() const;
+  inline uint32_t tagBits(uint32_t addr) const;
+  inline uint32_t indexBits(uint32_t addr) const;
 };
 
-// main memory (N=8-bit address space = 2^8 = 256bytes)
-template<uint32_t N>
-struct MainMemory {
-  std::byte bytes[1<< N];
 
-  // initialize memory with all zeros (unnecessary, but for demo purposes)
-  MainMemory() {
-    std::fill(bytes, bytes + (1<< N), std::byte{0u});
+// Word
+
+constexpr Word::Word() {
+  std::fill(bytes, bytes + nbytes(1), std::byte{0u});
+}
+constexpr Word::Word(uint32_t value) : Word(from(value)) {}
+constexpr Word::Word(float value) : Word(from(value)) {}
+
+constexpr Word::operator uint32_t() const { return to<uint32_t>(*this); }
+constexpr Word::operator float() const { return to<float>(*this); }
+
+template<typename T>
+constexpr Word Word::from(T value) {
+  static_assert(sizeof(T) == 4);
+  Word word;
+  auto b = std::bit_cast<std::byte*>(&value);
+  // TODO: Generalize this to big-endian
+  for (auto i = 0; i < nbytes(1); i++) {
+    word.bytes[i] = b[i];
   }
-
-  template<uint32_t W>
-  Block<W> readBlock(uint32_t addr) {
-    if (!isAligned(addr, W)) {
-      throw std::invalid_argument("address " + std::to_string(addr) + " is not word-aligned");
-    } else if (addr + nbytes(W) > (1<< N)) {
-      throw std::out_of_range("end address is out of address space");
-    }
-    Block<W> block;
-    std::copy(bytes + addr, bytes + addr + nbytes(W), block.bytes);
-    return block;
-  }
-
-  template<uint32_t W>
-  void writeBlock(uint32_t addr, Block<W> block) {
-    if (!isAligned(addr, W)) {
-      throw std::invalid_argument("address " + std::to_string(addr) + " is not word-aligned");
-    } else if (addr + nbytes(W) > (1<< N)) {
-      throw std::out_of_range("end address is out of address space");
-    }
-    std::copy(block.bytes, block.bytes + nbytes(W), bytes + addr);
-  }
-};
-
-// Cache
-// W: number of words in a block
-// S: number of blocks in a set (set-associativity)
-// B: number of blocks in the cache
-// N: address space of the underlying main memory
-// fields: | tag(rem) | index(log(B)) | block(log(W)) | word(2) |
-template<uint32_t W, uint32_t S, uint32_t B, uint32_t N,
-  WriteScheme WSch = WriteScheme::WriteThrough,
-  ReplacementPolicy Plc = ReplacementPolicy::Random>
-struct Cache {
-  static_assert(std::has_single_bit(W), "W must be a power of 2");
-  static_assert(std::has_single_bit(B), "B must be a power of 2");
-  static_assert(std::has_single_bit(S), "S must be a power of 2");
-  static_assert(B % S == 0, "set block count must divide total block count");
-
-  static constexpr uint32_t nBlockBits = static_cast<uint32_t>(std::countr_zero(W));
-  static constexpr uint32_t _indexBits = static_cast<uint32_t>(std::countr_zero(B));
-  static constexpr uint32_t nSetBits = static_cast<uint32_t>(std::countr_zero(S));
-  static constexpr uint32_t nIndexBits = _indexBits - nSetBits;
-  static constexpr uint32_t setCount = B / S;
-
-  struct Entry {
-    bool valid = false;
-    bool dirty = false;
-    uint32_t tag = 0u;
-    Block<W> block;
-    int lastAccessedTime = 0;       // only used for precise LRU
-  };
-
-  Entry entries[B];
-  MainMemory<N> mainMem;
-
-  // used only for approximate LRU; generalization of the approximate LRU cache
-  // scheme for 4-way set-associative caches (Patterson-Hennessy 5.8)
-  std::bitset<S - 1> lruBits[setCount];
-  int totalAccessCount = 0;
-
-  // only the initial setting of valid bit is necessary
-  Cache(MainMemory<N> mainMem) : mainMem{mainMem} {}
-
-  template<uint32_t _W>
-  Block<_W> readBlock(uint32_t addr) {
-    static_assert(W % _W == 0, "requested block size must divide internal block size");
-    if (!isAligned(addr, _W)) {
-      throw std::invalid_argument("address " + std::to_string(addr) + " is not word-aligned");
-    }
-    uint32_t tag = tagBits(addr);
-    uint32_t setIdx = indexBits(addr);
-    std::optional<uint32_t> entryIdx = findCacheEntry(addr);
-    if (!entryIdx.has_value()) {  // cache miss
-      // find a free cache entry -- may not exist
-      uint32_t startingEntryIdx = setIdx * S;
-      auto freeEntry = std::find_if(
-        entries + startingEntryIdx,
-        entries + startingEntryIdx + S,
-        [](const Entry &entry) { return !entry.valid; }
-      );
-      // evict one of the entries randomly if there are no free entries
-      if (freeEntry == entries + startingEntryIdx + S) {
-        auto selectEvictionIndex = [&]() -> uint32_t {
-          if constexpr (Plc == ReplacementPolicy::PreciseLRU) {
-            auto evictEntryIt = std::min_element(entries + startingEntryIdx,
-              entries + startingEntryIdx + S,
-              [](const Entry &e1, const Entry &e2) {
-                return e1.lastAccessedTime < e2.lastAccessedTime;
-              });
-            return evictEntryIt - entries;
-          } else if constexpr (Plc == ReplacementPolicy::ApproximateLRU) {
-            uint32_t lruEntryIdx = 0;
-            for (auto bit = 0, lruBit = 0; bit < nSetBits; ++bit) {
-              bool choice = !lruBits[setIdx][lruBit];
-              lruEntryIdx = (lruEntryIdx<< 1) + uint32_t(choice);
-              lruBit = 2 * lruBit + 1 + int(choice);
-            }
-            return lruEntryIdx + startingEntryIdx;
-          } else {
-            return randInt(startingEntryIdx, startingEntryIdx + S - 1);
-          }
-        };
-        uint32_t evictedIdx = selectEvictionIndex();
-        // (write-back only) if cache entry is dirty, write it back before eviction
-        if constexpr (WSch == WriteScheme::WriteBack) {
-          if (entries[evictedIdx].dirty) {
-            uint32_t evictedIndexBits = evictedIdx / S;
-            uint32_t evictedTagBits = entries[evictedIdx].tag;
-            uint32_t indexOffset = nBlockBits + 2;
-            uint32_t tagOffset = indexOffset + nIndexBits;
-            uint32_t evictedAddr = (evictedTagBits<< tagOffset) |
-              (evictedIndexBits<< indexOffset);
-            mainMem.template writeBlock<W>(evictedAddr, entries[evictedIdx].block);
-          }
-        }
-        entryIdx = std::make_optional(evictedIdx);
-      } else {
-        entryIdx = std::make_optional(freeEntry - entries);
-      }
-      // read the block at the requested address from main memory
-      uint32_t startingAddr = (addr / nbytes(W)) * nbytes(W);
-      Block block = mainMem.template readBlock<W>(startingAddr);
-      entries[*entryIdx] = Entry{true, false, tag, block};
-    } else {
-
-    }
-    // now, the entry at entryIdx contains a valid cache
-    Entry &entry = entries[*entryIdx];
-    const Block<W> &entryBlock = entry.block;
-    Block<_W> requestedBlock;
-    uint32_t blockOffset = addr % nbytes(W);
-    std::copy(entryBlock.bytes + blockOffset, entryBlock.bytes + blockOffset + nbytes(_W),
-      requestedBlock.bytes);
-    updateLRUInfo(entry, addr, *entryIdx % S);
-    ++totalAccessCount;     // update analytics
-    return requestedBlock;
-  }
-
-  template<uint32_t _W>
-  void writeBlock(uint32_t addr, Block<_W> block) {
-    static_assert(W % _W == 0, "requested block size must divide internal block size");
-    if (!isAligned(addr, _W)) {
-      throw std::invalid_argument("address " + std::to_string(addr) + " is not word-aligned");
-    }
-    if (std::optional<uint32_t> entryIdx = findCacheEntry(addr)) {  // cache hit
-      Entry &entry = entries[*entryIdx];
-      Block<W> &entryBlock = entry.block;
-      uint32_t blockAddr = addr % nbytes(W);
-      std::copy(block.bytes, block.bytes + nbytes(_W), entryBlock.bytes + blockAddr);
-      entry.dirty = true;
-      updateLRUInfo(entry, addr, *entryIdx % S);
-    } else {  // cache miss
-      // (write-back only) put the block containing address into cache, then write
-      if constexpr (WSch == WriteScheme::WriteBack) {
-        this->readBlock<_W>(addr);
-        this->writeBlock<_W>(addr, block);
-        return;
-      }
-    }
-    // (write-through only) write unconditionally to the main memory
-    if constexpr (WSch == WriteScheme::WriteThrough) {
-      mainMem.template writeBlock(addr, block);
-    }
-    ++totalAccessCount;     // update analytics
-  }
-
-  std::optional<uint32_t> findCacheEntry(uint32_t addr) {
-    uint32_t tag = tagBits(addr);
-    uint32_t setIdx = indexBits(addr);
-    uint32_t startingEntryIdx = setIdx * S;
-    for (auto offset = 0; offset < S; offset++) {
-      const Entry &entry = entries[startingEntryIdx + offset];
-      if (entry.valid && entry.tag == tag) {
-        return std::make_optional(startingEntryIdx + offset);
-      }
-    }
-    return {};
-  }
-
-  // localBlockIdx refers to the index of the block or entry in the set
-  void updateLRUInfo(Entry &entry, uint32_t addr, uint32_t localBlockIdx) {
-    if constexpr (Plc == ReplacementPolicy::PreciseLRU) {
-      entry.lastAccessedTime = totalAccessCount;
-    } else if constexpr (Plc == ReplacementPolicy::ApproximateLRU) {
-      uint32_t setIdx = indexBits(addr);
-      std::bitset<nSetBits> blockAddr(localBlockIdx);
-      // iterate from the most significant bit
-      for (int bit = nSetBits - 1, lruBit = 0; bit >= 0; bit--) {
-        lruBits[setIdx][lruBit] = blockAddr[bit];
-        lruBit = 2 * lruBit + 1 + int(blockAddr[bit]);
-      }
-    }
-  }
-
-  uint32_t tagBits(uint32_t addr) {
-    return addr>> (nIndexBits + nBlockBits + 2);
-  }
-
-  uint32_t indexBits(uint32_t addr) {
-    return (addr>> (nBlockBits + 2)) & ((1<< nIndexBits) - 1);
-  }
-};
-
-// Checks if address is aligned on an n-word boundary
-inline bool isAligned(uint32_t addr, uint32_t nwords) {
-  return addr % nbytes(nwords) == 0;
+  return word;
 }
 
-// better: consider using the new RNGs offered by C++'s <random>
-inline uint32_t randInt(uint32_t min, uint32_t max) {
-  return min + rand() % (max - min + 1);
-}
-
-inline std::ostream& operator<<(std::ostream& os, const Word& word) {
-  os << uint32_t(word);
-  return os;
-}
-
-template<uint32_t W>
-std::ostream& operator<<(std::ostream& os, const Block<W>& block) {
-  os << "{";
-  for (auto wordIdx = 0; wordIdx < W; wordIdx++) {
-    os << block[wordIdx];
-    if (wordIdx < W - 1) {
-      os << ", ";
-    }
-  }
-  os << "}";
-  return os;
-}
-
-// cache pretty-printing
-template<uint32_t W, uint32_t S, uint32_t B, uint32_t N,
-  WriteScheme WSch, ReplacementPolicy Plc>
-std::ostream& operator<<(std::ostream& os, const Cache<W, S, B, N, WSch, Plc> &cache) {
-  os << std::string(60, '-') << "\n";
-  os << std::setw(8) << "status" << " | ";
-  os << std::setw(8) << "dirty" << " | ";
-  os << std::setw(8) << "tag" << " | ";
-  if constexpr (Plc == ReplacementPolicy::PreciseLRU) {
-    os << std::setw(8) << "lru bits" << " | ";
-  }
-  os << "block" << "\n";
-  os << std::string(60, '-') << "\n";
-  for (auto entryIdx = 0; entryIdx < B; entryIdx++) {
-    const auto& entry = cache.entries[entryIdx];
-    os << std::setw(8) << (entry.valid ? "valid" : "invalid") << " | ";
-    os << std::setw(8) << (entry.dirty ? "yes" : "no") << " | ";
-    os << std::setw(8) << std::hex << entry.tag << std::dec << " | ";
-    if constexpr (Plc == ReplacementPolicy::PreciseLRU) {
-      os << std::setw(8) << std::dec << entry.lastAccessedTime << " | ";
-    }
-    os << entry.block << "\n";
-    if (entryIdx % S == S - 1) {
-      if constexpr (Plc == ReplacementPolicy::ApproximateLRU) {
-        uint32_t setIdx = entryIdx / S;
-        os << std::string(10, '=') << "\n";
-        os << "lru bits (prints mru; reversed): " << cache.lruBits[setIdx] << "\n";
-      }
-      os << std::string(60, '-') << (entryIdx < B - 1 ? "\n" : "");
-    }
-  }
-  return os;
+template<typename T>
+constexpr T Word::to(Word word) {
+  static_assert(sizeof(T) == 4);
+  return std::bit_cast<T>(word.bytes);
 }
 
 #endif

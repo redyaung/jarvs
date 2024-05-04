@@ -54,58 +54,32 @@ struct Unit {
   virtual void operate() = 0;
 };
 
-template<size_t W>
-struct WideInputSignal {
-  Block<W> val;
-  Unit *unit;
+struct Signal {
+public:
+  Word operator*() const;
+  Word &operator*();
 
-  explicit WideInputSignal(Unit *unit) : unit{unit} {}
-  void changeValue(const Block<W> &newVal) {
-    val = newVal;
-    unit->notifyInputChange();
-  }
-  const Block<W> &operator*() const { return val; }
-  Block<W> &operator*() { return val; }
-};
-
-template<size_t W>
-struct WideOutputSignal {
-  Block<W> val;
-  std::vector<WideInputSignal<W>*> syncedInputs;
-
-  WideOutputSignal<W>& operator>>(WideInputSignal<W> &signal) {
-    syncedInputs.push_back(&signal);
-    return *this;
-  }
-  void operator<<(const Block<W> &newVal) {
-    val = newVal;
-    for (WideInputSignal<W> *inSignal : syncedInputs) {
-      inSignal->changeValue(newVal);
-    }
-  }
-  const Block<W> &operator*() const { return val; }
-  Block<W> &operator*() { return val; }
+protected:
+  Word val;
 };
 
 // out-in synchronization: outputSignal >> inputSignal >> ...
 // only allow changes to occur through synced output signals
-struct InputSignal : WideInputSignal<1> {
-  using WideInputSignal<1>::WideInputSignal;
+struct InputSignal : public Signal {
+  Unit *unit;
 
-  Word operator*() const { return val[0]; }
-  Word& operator*() { return val[0]; }
+  explicit InputSignal(Unit *unit);
+  void changeValue(Word newValue);
 };
 
 // can be synchronized to a number of InputSignals
 // receiving a new value: outputSignal << newValue
-struct OutputSignal : WideOutputSignal<1> {
-  using WideOutputSignal<1>::WideOutputSignal;
+struct OutputSignal : public Signal {
+  std::vector<InputSignal*> syncedInputs;
 
-  void operator<<(Word newVal) {
-    WideOutputSignal<1>::operator<<(Block<1>({newVal}));
-  }
-  Word operator*() const { return val[0]; }
-  Word& operator*() { return val[0]; }
+  // assumes that each InputSignal is synced only ONCE with a particular OutputSignal
+  OutputSignal& operator>>(InputSignal &signal);
+  void operator<<(Word newValue);
 };
 
 // out-of-sync units immediately propagate input changes to its outputs
@@ -281,172 +255,18 @@ struct BranchALUUnit : public OutOfSyncUnit {
   void operate() override;
 };
 
-// W: number of words in each block
-template<size_t AddressSpace, uint32_t W>
-struct __MainMemoryUnit : public InSyncUnit {
-  InputSignal isRead{this};
-  InputSignal shouldOperate{this};
-  InputSignal address{this};
-  WideInputSignal<W> writeData{this};
-
-  WideOutputSignal<W> readData;
-  OutputSignal isReady;
-
-  const size_t latency;     // how many cycles it takes to complete an access
-
-  bool isCurrentlyReading = false;
-  int cyclesOperated = 0;
-
-  std::byte bytes[1<< AddressSpace];
-
-  __MainMemoryUnit(size_t latency = 1) : latency{latency} {
-    std::fill(bytes, bytes + (1<< AddressSpace), std::byte{0});
-  }
-
-  inline bool isOperating() const {
-    return cyclesOperated > 0;
-  }
-
-  // invariant: whenever the memory unit is operating, the current request should be
-  // consistent with the request made previously, i.e., if we requested a read()
-  // in the last cycle, the current request must also be a read()
-  bool checkInvariant() const {
-    if (!isOperating()) {
-      return true;
-    }
-    return *shouldOperate && isCurrentlyReading == *isRead;
-  }
-
-  // assumes invariant has been met
-  bool willCompleteOperation() const {
-    return cyclesOperated + 1 >= latency;
-  }
-
-  void operate() override {
-    assert(checkInvariant());
-    if (!*shouldOperate) {
-      isReady << true;
-      return;
-    }
-    isCurrentlyReading = *isRead;
-    if (!willCompleteOperation()) {
-      isReady << false;
-      cyclesOperated++;
-      return;
-    }
-    if (*isRead) {   // read
-      readData << readBlock<W>(*address);
-    } else {            // write
-      writeBlock(*address, *writeData);
-    }
-    isReady << true;
-    cyclesOperated = 0;
-  }
-
-  template<uint32_t _W>
-  Block<_W> readBlock(uint32_t addr) {
-    if (!isAligned(addr, _W)) {
-      throw std::invalid_argument("address " + std::to_string(addr) + " is not word-aligned");
-    } else if (addr + nbytes(_W) > (1<< AddressSpace)) {
-      throw std::out_of_range("end address is out of address space");
-    }
-    Block<_W> block;
-    std::copy(bytes + addr, bytes + addr + nbytes(_W), block.bytes);
-    return block;
-  }
-
-  template<uint32_t _W>
-  void writeBlock(uint32_t addr, Block<_W> block) {
-    if (!isAligned(addr, _W)) {
-      throw std::invalid_argument("address " + std::to_string(addr) + " is not word-aligned");
-    } else if (addr + nbytes(_W) > (1<< AddressSpace)) {
-      throw std::out_of_range("end address is out of address space");
-    }
-    std::copy(block.bytes, block.bytes + nbytes(_W), bytes + addr);
-  }
-};
-
-// widens an InputSignal to a WideOutputSignal<1>
-struct SignalWideningUnit : public OutOfSyncUnit {
-  InputSignal in{this};
-  WideOutputSignal<1> out;
-
-  void operate() override;
-};
-
-// shortens a WideInputSignal<1> to an OutputSignal
-struct SignalShorteningUnit : public OutOfSyncUnit {
-  WideInputSignal<1> in{this};
-  OutputSignal out;
-
-  void operate() override;
-};
-
-struct ___DataMemoryUnit : public InSyncUnit {
-  std::shared_ptr<TimedMemory<1>> memory;
+struct DataMemoryUnit : public InSyncUnit {
+  std::shared_ptr<TimedMemory> memory;
 
   InputSignal ctrlMemRead{this};
-  InputSignal address{this};
-  InputSignal &writeData = __writeDataWidener.in;
-  InputSignal ctrlMemWrite{this};
-
-  OutputSignal readData;
-  OutputSignal isReady;
-
-  SignalWideningUnit __writeDataWidener;
-
-  ___DataMemoryUnit(std::shared_ptr<TimedMemory<1>> memory) : memory{memory} {}
-  void operate() override {
-    if (*ctrlMemRead) {
-      std::optional<Block<1>> readVal = memory->readBlock(*address);
-      isReady << readVal.has_value();
-      if (readVal.has_value()) {
-        readData << readVal.value()[0];
-      }
-    } else if (*ctrlMemWrite) {
-      bool hasWritten = memory->writeBlock(*address, *__writeDataWidener.out);
-      isReady << hasWritten;
-    } else {
-      assert(memory->state == MemoryState::Ready);
-      isReady << true;
-    }
-  }
-};
-
-struct __DataMemoryUnit : public InSyncUnit {
-  // note: the template argument W must be 1 here as the memory unit accesses words
-  __MainMemoryUnit<8, 1> memory;
-
-  InputSignal &ctrlMemRead = memory.isRead;
-  InputSignal &address = memory.address;
-  InputSignal &writeData = __writeDataWidener.in;
-  InputSignal ctrlMemWrite{this};
-
-  OutputSignal &readData = __readDataShortener.out;
-  OutputSignal &isReady = memory.isReady;
-
-  OutputSignal __isRead;
-  OutputSignal __isWrite;
-  OrGate __shouldOperate;
-  SignalWideningUnit __writeDataWidener;
-  SignalShorteningUnit __readDataShortener;
-
-  __DataMemoryUnit(size_t latency);
-  void operate() override;
-};
-
-// we will most likely need output signal(s) that asserts when the memory unit has
-// finished its write or read operation
-// for now, only use main memory with an 8-bit address space
-struct DataMemoryUnit : public OutOfSyncUnit {
   InputSignal address{this};
   InputSignal writeData{this};
-  InputSignal ctrlMemRead{this};
   InputSignal ctrlMemWrite{this};
+
   OutputSignal readData;
+  OutputSignal isReady;
 
-  MainMemory<8> memory;
-
+  DataMemoryUnit(std::shared_ptr<TimedMemory> memory);
   void operate() override;
 };
 
@@ -455,7 +275,7 @@ struct InstructionMemoryUnit : public OutOfSyncUnit {
   InputSignal address{this};
   OutputSignal instruction;
 
-  MainMemory<8> memory; 
+  TimedMainMemory memory{8, 1};
 
   void operate() override;
 };
@@ -715,7 +535,7 @@ struct PipelinedProcessor : public Processor {
   EXMEMRegisters EX_MEM;
 
   // memory (MEM)
-  ___DataMemoryUnit dataMemory;
+  DataMemoryUnit dataMemory;
   BufferedMEMWBRegisters MEM_WB;
 
   // write-back (WB)
@@ -745,7 +565,6 @@ std::ostream& operator<<(std::ostream& os, const ALUControl &aluControl);
 std::ostream& operator<<(std::ostream& os, const BranchALUControl &branchAluControl);
 std::ostream& operator<<(std::ostream& os, const ALUUnit &alu);
 std::ostream& operator<<(std::ostream& os, const BranchALUUnit &branchAlu);
-std::ostream& operator<<(std::ostream& os, const DataMemoryUnit &dataMemory);
 std::ostream& operator<<(std::ostream& os, const InstructionMemoryUnit &instructionMemory);
 std::ostream& operator<<(std::ostream& os, const AndGate &andGate);
 std::ostream& operator<<(std::ostream& os, const OrGate &orGate);

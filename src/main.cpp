@@ -124,7 +124,7 @@ Element renderInstructions(
   return table.Render();
 }
 
-Element render(TimedMainMemory<8, 1> &mainMem) {
+Element render(TimedMainMemory &mainMem) {
   auto fmtEntry = [](std::string content, int width = 5) {
     return hbox(
       text(" "),
@@ -147,12 +147,7 @@ Element render(TimedMainMemory<8, 1> &mainMem) {
     curRow.push_back(fmtEntry(std::to_string(row * 32), 5) | bold);
     for (auto col = 0; col < 8; ++col) {
       auto addr = row * 32 + col * 4;
-      Word valWord;
-      for (int i = 0; i < 4; i++) {
-        valWord.bytes[i] = mainMem.bytes[addr + i];
-      }
-      int32_t val = Word::to<int32_t>(valWord);
-      curRow.push_back(fmtEntry(std::to_string(val)));
+      curRow.push_back(fmtEntry(std::to_string(mainMem.storage[addr>> 2])));
     }
     tableEntries.push_back(curRow);
   }
@@ -192,7 +187,7 @@ int main(int argc, const char *argv[]) {
 
   // register instructions into instruction memory
   for (auto i = 0; i < instructions.size(); ++i) {
-    cpu.instructionMemory.memory.writeBlock(i * 4, Block<1>{instructions[i]});
+    cpu.instructionMemory.memory.writeBlock(i * 4, Block{instructions[i]});
   }
 
   std::string statsStr = "forwarding = "s + (useForwarding ? "on" : "off");
@@ -212,7 +207,7 @@ int main(int argc, const char *argv[]) {
         ),
         window(
           text("Memory (RAM)"),
-          render(*((TimedMainMemory<8, 1> *) cpu.dataMemory.memory.get()))
+          render(*(dynamic_cast<TimedMainMemory*>(cpu.dataMemory.memory.get())))
         ) | flex
       ),
       window(

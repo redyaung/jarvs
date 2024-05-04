@@ -73,6 +73,33 @@ namespace __ProcessorUtils {
 
 using namespace __ProcessorUtils;
 
+Word Signal::operator*() const {
+  return val;
+}
+
+Word &Signal::operator*() {
+  return val;
+}
+
+InputSignal::InputSignal(Unit *unit) : unit{unit}, Signal{} {}
+
+void InputSignal::changeValue(Word newValue) {
+  val = newValue;
+  unit->notifyInputChange();
+}
+
+OutputSignal& OutputSignal::operator>>(InputSignal &signal) {
+  syncedInputs.push_back(&signal);
+  return *this;
+}
+
+void OutputSignal::operator<<(Word newValue) {
+  val = newValue;
+  for (InputSignal *signal : syncedInputs) {
+    signal->changeValue(newValue);
+  }
+}
+
 Word Flushable::zeroOnFlush(Word val) const {
   return *shouldFlush ? Word(0u) : val;
 }
@@ -279,41 +306,26 @@ void BranchALUUnit::operate() {
   }
 }
 
-void SignalWideningUnit::operate() {
-  out << Block<1>({*in});
-}
+DataMemoryUnit::DataMemoryUnit(std::shared_ptr<TimedMemory> memory)
+  : memory{memory} {}
 
-void SignalShorteningUnit::operate() {
-  out << (*in)[0];
-}
-
-__DataMemoryUnit::__DataMemoryUnit(size_t latency) : memory{latency} {
-  __isRead >> __shouldOperate.input0;
-  __isWrite >> __shouldOperate.input1;
-  __shouldOperate.output >> memory.shouldOperate;
-  __writeDataWidener.out >> memory.writeData;
-  memory.readData >> __readDataShortener.in;
-}
-
-void __DataMemoryUnit::operate() {
-  __isRead << *ctrlMemRead;
-  __isWrite << *ctrlMemWrite;
-  memory.operate();
-}
-
-// won't read and write at the same time
 void DataMemoryUnit::operate() {
   if (*ctrlMemRead) {
-    Word readWord = memory.readBlock<1>(*address)[0];
-    readData << readWord;
+    std::optional<Block> readVal = memory->readBlock(*address, 1);
+    isReady << readVal.has_value();
+    if (readVal.has_value()) {
+      readData << readVal.value()[0];
+    }
   } else if (*ctrlMemWrite) {
-    memory.writeBlock(*address, Block<1>{*writeData});
+    isReady << memory->writeBlock(*address, Block{*writeData});
+  } else {
+    assert(memory->getState() == MemoryState::Ready);
+    isReady << true;
   }
 }
 
 void InstructionMemoryUnit::operate() {
-  Word readInstruction = memory.readBlock<1>(*address)[0];
-  instruction << readInstruction;
+  instruction << memory.readBlock(*address, 1).value()[0];
 }
 
 void AndGate::operate() {
@@ -507,8 +519,8 @@ bool DataHazardDetectionUnit::hasDataHazard(uint32_t rs1, uint32_t rs2) {
 PipelinedProcessor::PipelinedProcessor(
   bool useForwarding,
   size_t memoryLatency
-) : dataMemory(std::shared_ptr<TimedMemory<1>>(
-      new TimedMainMemory<8, 1>(memoryLatency)
+) : dataMemory(std::shared_ptr<TimedMemory>(
+      new TimedMainMemory(8, memoryLatency)
     )),
     forwardingUnit(ID_EX, EX_MEM, MEM_WB),
     hazardDetectionUnit(useForwarding, issueUnit, IF_ID, ID_EX, EX_MEM),
@@ -775,26 +787,6 @@ std::ostream& operator<<(std::ostream& os, const BranchALUUnit &branchAlu) {
   return os;
 }
 
-std::ostream& operator<<(std::ostream& os, const ___DataMemoryUnit &dataMemory) {
-  os << "in ___DataMemoryUnit: " << std::endl;
-  os << "\t" << "address: " << dataMemory.address << std::endl;
-  os << "\t" << "writeData: " << dataMemory.writeData << std::endl;
-  os << "\t" << "ctrlMemRead: " << dataMemory.ctrlMemRead << std::endl;
-  os << "\t" << "ctrlMemWrite: " << dataMemory.ctrlMemWrite << std::endl;
-  os << "\t" << "readData: " << dataMemory.readData;
-  return os;
-}
-
-std::ostream& operator<<(std::ostream& os, const __DataMemoryUnit &dataMemory) {
-  os << "in __DataMemoryUnit: " << std::endl;
-  os << "\t" << "address: " << dataMemory.address << std::endl;
-  os << "\t" << "writeData: " << dataMemory.writeData << std::endl;
-  os << "\t" << "ctrlMemRead: " << dataMemory.ctrlMemRead << std::endl;
-  os << "\t" << "ctrlMemWrite: " << dataMemory.ctrlMemWrite << std::endl;
-  os << "\t" << "readData: " << dataMemory.readData;
-  return os;
-}
-
 std::ostream& operator<<(std::ostream& os, const DataMemoryUnit &dataMemory) {
   os << "in DataMemoryUnit: " << std::endl;
   os << "\t" << "address: " << dataMemory.address << std::endl;
@@ -802,6 +794,7 @@ std::ostream& operator<<(std::ostream& os, const DataMemoryUnit &dataMemory) {
   os << "\t" << "ctrlMemRead: " << dataMemory.ctrlMemRead << std::endl;
   os << "\t" << "ctrlMemWrite: " << dataMemory.ctrlMemWrite << std::endl;
   os << "\t" << "readData: " << dataMemory.readData;
+  os << "\t" << "isReady: " << dataMemory.isReady;
   return os;
 }
 

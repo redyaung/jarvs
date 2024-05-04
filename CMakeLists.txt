@@ -11,7 +11,6 @@ FetchContent_Declare(ftxui
   GIT_REPOSITORY https://github.com/ArthurSonzogni/ftxui
   GIT_TAG v5.0.0
 )
-
 FetchContent_GetProperties(ftxui)
 if(NOT ftxui_POPULATED)
   FetchContent_Populate(ftxui)
@@ -22,6 +21,7 @@ endif()
 add_library(simulator_lib STATIC
   src/processor.cpp
   src/assembler.cpp
+  src/memory.cpp
 )
 target_include_directories(simulator_lib
   PUBLIC ${PROJECT_SOURCE_DIR}/include
@@ -54,7 +54,7 @@ enable_testing()
 add_executable(simulator_test
   tests/memory_test.cpp
   tests/assembler_test.cpp
-  # tests/processor_test.cpp
+  tests/processor_test.cpp
 )
 target_include_directories(simulator_test
   PRIVATE ${PROJECT_SOURCE_DIR}/include

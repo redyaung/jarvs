@@ -25,7 +25,7 @@ namespace {
   void registerInstructions(PipelinedProcessor &processor, std::span<std::string> instructions) {
     for (auto i = 0; i < instructions.size(); ++i) {
       Word encoded = encodeInstruction(instructions[i]);
-      processor.instructionMemory.memory.writeBlock(i * 4, Block<1>{encoded});
+      processor.instructionMemory.memory._writeBlockTillDone(i * 4, Block{encoded});
     }
   }
 
@@ -33,7 +33,7 @@ namespace {
     PipelinedProcessor &processor, std::span<Word> instructions
   ) {
     for (auto i = 0; i < instructions.size(); ++i) {
-      processor.instructionMemory.memory.writeBlock(i * 4, Block<1>{instructions[i]});
+      processor.instructionMemory.memory._writeBlockTillDone(i * 4, Block{instructions[i]});
     }
   }
 
@@ -341,28 +341,32 @@ namespace {
     }
 
     OutputSignal addr, write, willRead, willWrite;
-    DataMemoryUnit memUnit;
+    DataMemoryUnit memUnit{std::shared_ptr<TimedMemory>(
+      new TimedMainMemory{8, 1}
+    )};
     MockUnit receiver;
   };
 
   TEST_F(DataMemoryUnitTest, DoNothingOnDeassertedControlSignals) {
     EXPECT_CALL(receiver, notifyInputChange()).Times(0);
-    willRead << 0; willWrite << 0;
-    addr << 0xA0; write << 0xDEADBEEFu;
-    EXPECT_EQ(memUnit.memory.readBlock<1>(0xA0)[0], 0x0u);
+    willRead << 0; willWrite << 0; addr << 0xA0; write << 0xDEADBEEFu;
+    memUnit.operate();
+    EXPECT_EQ(memUnit.memory->_readBlockTillDone(0xA0, 1)[0], 0x0u);
   }
 
   // current behavior -- likely to change in the future (see class definition)
   TEST_F(DataMemoryUnitTest, WriteToMemory) {
     EXPECT_CALL(receiver, notifyInputChange()).Times(0);
     willWrite << 1; addr << 0xA0; write << 0xDEADBEEFu;
-    EXPECT_EQ(memUnit.memory.readBlock<1>(0xA0)[0], 0xDEADBEEFu);
+    memUnit.operate();
+    EXPECT_EQ(memUnit.memory->_readBlockTillDone(0xA0, 1)[0], 0xDEADBEEFu);
   }
 
   TEST_F(DataMemoryUnitTest, ReadFromMemory) {
     EXPECT_CALL(receiver, notifyInputChange()).Times(AtLeast(1));
-    memUnit.memory.writeBlock(0xA0, Block<1>{0xFACADEu});
+    memUnit.memory->_writeBlockTillDone(0xA0, Block{0xFACADEu});
     willRead << 1; addr << 0xA0;
+    memUnit.operate();
     EXPECT_EQ(*receiver.in1, 0xFACADEu);
   }
 
@@ -410,7 +414,7 @@ namespace {
     PipelinedProcessor processor;
 
     uint32_t add = 0b0000000'00011'00010'000'00001'0110011;   // add x1, x2, x3
-    processor.instructionMemory.memory.writeBlock(0x0, Block<1>{add});
+    processor.instructionMemory.memory._writeBlockTillDone(0x0, Block{add});
     processor.registers.intRegs.writeRegister(2, 6);
     processor.registers.intRegs.writeRegister(3, 7);
 
@@ -425,7 +429,7 @@ namespace {
     PipelinedProcessor processor;
 
     uint32_t sub = 0b0100000'00011'00010'000'00001'0110011;   // sub x1, x2, x3
-    processor.instructionMemory.memory.writeBlock(0x0, Block<1>{sub});
+    processor.instructionMemory.memory._writeBlockTillDone(0x0, Block{sub});
     processor.registers.intRegs.writeRegister(2, 6);
     processor.registers.intRegs.writeRegister(3, 7);
 
@@ -496,7 +500,7 @@ namespace {
     PipelinedProcessor processor;
 
     uint32_t addi = 0b001111101000'00010'000'00001'0010011;   // addi x1, x2, 1000
-    processor.instructionMemory.memory.writeBlock(0x0, Block<1>{addi});
+    processor.instructionMemory.memory._writeBlockTillDone(0x0, Block{addi});
     processor.registers.intRegs.writeRegister(2, 24u);
 
     for (int cycle = 0; cycle < 5; cycle++) {
@@ -523,9 +527,9 @@ namespace {
 
     // load the value at memory address 0x10 + 4 = 0x14 into x1
     uint32_t lw = 0b000000000100'00010'010'00001'0000011;     // lw x1, 4(x2)
-    processor.instructionMemory.memory.writeBlock(0x0, Block<1>{lw});
+    processor.instructionMemory.memory._writeBlockTillDone(0x0, Block{lw});
     processor.registers.intRegs.writeRegister(2, 0x10); 
-    processor.dataMemory.memory->writeBlock(0x14, Block<1>{0xBEEFu});
+    processor.dataMemory.memory->_writeBlockTillDone(0x14, Block{0xBEEFu});
 
     for (int cycle = 0; cycle < 5; cycle++) {
       processor.executeOneCycle();
@@ -538,7 +542,7 @@ namespace {
 
     // store 0xFACADEu at the memory address 0x10 + 4 = 0x14
     uint32_t sw = 0b0000000'00001'00010'010'00100'0100011;    // sw x1, 4(x2)
-    processor.instructionMemory.memory->writeBlock(0x0, Block<1>{sw});
+    processor.instructionMemory.memory._writeBlockTillDone(0x0, Block{sw});
     processor.registers.intRegs.writeRegister(1, 0xFACADEu); 
     processor.registers.intRegs.writeRegister(2, 0x10u);
 
@@ -546,7 +550,7 @@ namespace {
     for (int cycle = 0; cycle < 4; cycle++) {
       processor.executeOneCycle();
     }
-    EXPECT_EQ(processor.dataMemory.memory.readBlock<1>(0x14u)[0], 0xFACADEu);
+    EXPECT_EQ(processor.dataMemory.memory->_readBlockTillDone(0x14u, 1)[0], 0xFACADEu);
   }
 
   TEST(PipelinedProcessorTest, MultipleAddInstructions) {
@@ -577,8 +581,8 @@ namespace {
   TEST(PipelinedProcessorTest, LoadAddSequence) {
     PipelinedProcessor processor;
 
-    processor.dataMemory.memory->writeBlock(0x0, Block<1>{1u});
-    processor.dataMemory.memory->writeBlock(0x4, Block<1>{2u});
+    processor.dataMemory.memory->_writeBlockTillDone(0x0, Block{1u});
+    processor.dataMemory.memory->_writeBlockTillDone(0x4, Block{2u});
     std::vector<std::string> instructions {
       "lw x1, 0(x0)",
       "lw x2, 4(x0)",
@@ -631,7 +635,7 @@ namespace {
   TEST(PipelinedProcessorTest, ForwardFromMEM_WB) {
     PipelinedProcessor processor(true);
 
-    processor.dataMemory.memory->writeBlock(0x0, Block<1>{24});
+    processor.dataMemory.memory->_writeBlockTillDone(0x0, Block{24});
     std::vector<std::string> instructions {
       "lw x1, 0(x0)",
       "add x0, x0, x0",   // nop
@@ -647,7 +651,7 @@ namespace {
   TEST(PipelinedProcessorTest, HandleLoadUseHazard) {
     PipelinedProcessor processor(true);
 
-    processor.dataMemory.memory.writeBlock(0x0, Block<1>{24});
+    processor.dataMemory.memory->_writeBlockTillDone(0x0, Block{24});
     std::vector<std::string> instructions {
       "lw x1, 0(x0)",
       "add x2, x1, x1"
@@ -662,7 +666,7 @@ namespace {
   TEST(PipelinedProcessorTest, HandleLoadUseHazard2) {
     PipelinedProcessor processor(true);
 
-    processor.dataMemory.memory.writeBlock(0x0, Block<1>{24});
+    processor.dataMemory.memory->_writeBlockTillDone(0x0, Block{24});
     std::vector<std::string> instructions {
       "lw x1, 0(x0)",
       "add x2, x1, x1",
@@ -678,7 +682,7 @@ namespace {
   TEST(PipelinedProcessorTest, HazardDetectionNoFwdLoadAdd) {
     PipelinedProcessor processor;
 
-    processor.dataMemory.memory.writeBlock(0x0, Block<2>{1u, 2u});
+    processor.dataMemory.memory->_writeBlockTillDone(0x0, Block{1u, 2u});
     std::vector<std::string> instructions {
       "lw x1, 0(x0)",
       "lw x2, 4(x0)",
@@ -889,16 +893,16 @@ namespace {
     EXPECT_EQ(processor.registers.intRegs.readRegister(11), 12);
     EXPECT_EQ(processor.registers.intRegs.readRegister(20), 3);
     EXPECT_EQ(processor.registers.intRegs.readRegister(21), 6);
-    EXPECT_EQ(processor.dataMemory.memory.readBlock<1>(0)[0], 1);
-    EXPECT_EQ(processor.dataMemory.memory.readBlock<1>(4)[0], 2);
-    EXPECT_EQ(processor.dataMemory.memory.readBlock<1>(8)[0], 3);
-    EXPECT_EQ(processor.dataMemory.memory.readBlock<1>(12)[0], 6);
+    EXPECT_EQ(processor.dataMemory.memory->_readBlockTillDone(0, 1)[0], 1);
+    EXPECT_EQ(processor.dataMemory.memory->_readBlockTillDone(4, 1)[0], 2);
+    EXPECT_EQ(processor.dataMemory.memory->_readBlockTillDone(8, 1)[0], 3);
+    EXPECT_EQ(processor.dataMemory.memory->_readBlockTillDone(12, 1)[0], 6);
   }
 
   TEST(MemoryTimingTest, Latency2Cycles) {
     PipelinedProcessor processor(true, 2);
 
-    processor.dataMemory.memory.writeBlock(0x0, Block<2>{1u, 2u});
+    processor.dataMemory.memory->_writeBlockTillDone(0x0, Block{1u, 2u});
     std::string instructionsStr(R"(
       lw x1, 0(x0)
       lw x2, 4(x0)
@@ -927,7 +931,7 @@ namespace {
   TEST(MemoryTimingTest, Latency2CyclesNoFwd) {
     PipelinedProcessor processor(false, 2);
 
-    processor.dataMemory.memory.writeBlock(0x0, Block<2>{1u, 2u});
+    processor.dataMemory.memory->_writeBlockTillDone(0x0, Block{1u, 2u});
     std::string instructionsStr(R"(
       lw x1, 0(x0)
       lw x2, 4(x0)
